@@ -1,26 +1,18 @@
+import pickle
+
 from sqlalchemy import select
 
 from app.database.database import SessionLocal
 from app.database.models import Memory
+from app.embeddings.embedding_engine import EmbeddingEngine
 
 
 class MemoryStore:
 
-    # Relations where only one current value should exist
-    SINGLE_VALUE_RELATIONS = {
-        "lives_in",
-        "located_in",
-        "works_at",
-        "studies_at",
-        "studies",
-        "job",
-        "occupation",
-        "age",
-        "name",
-    }
-
     def __init__(self):
+
         self.session = SessionLocal()
+        self.embedding_engine = EmbeddingEngine()
 
     def save_memory(
         self,
@@ -30,14 +22,10 @@ class MemoryStore:
         category,
         importance=5
     ):
-        # Normalize text for consistent comparison
-        subject = subject.strip()
-        relation = relation.strip().lower()
-        value = value.strip()
 
-        # ---------------------------------------------------------
-        # 1. Check for an exact duplicate
-        # ---------------------------------------------------------
+        # -------------------------------------------------
+        # 1. Check for an exact active duplicate
+        # -------------------------------------------------
 
         duplicate_statement = select(Memory).where(
             Memory.subject == subject,
@@ -47,56 +35,41 @@ class MemoryStore:
         )
 
         existing_memory = (
-            self.session.execute(duplicate_statement)
+            self.session.execute(
+                duplicate_statement
+            )
             .scalars()
             .first()
         )
 
         if existing_memory:
 
-            # Update importance if the new information is more important
-            if importance > existing_memory.importance:
-                existing_memory.importance = importance
-
-            self.session.commit()
-            self.session.refresh(existing_memory)
-
             return existing_memory, "duplicate"
 
-        # ---------------------------------------------------------
-        # 2. Check whether this is a single-value relation
-        # ---------------------------------------------------------
+        # -------------------------------------------------
+        # 2. Generate embedding
+        # -------------------------------------------------
 
-        if relation in self.SINGLE_VALUE_RELATIONS:
-
-            existing_statement = select(Memory).where(
-                Memory.subject == subject,
-                Memory.relation == relation,
-                Memory.active.is_(True)
+        embedding = (
+            self.embedding_engine.generate_memory_embedding(
+                subject=subject,
+                relation=relation,
+                value=value,
+                category=category
             )
+        )
 
-            existing_memory = (
-                self.session.execute(existing_statement)
-                .scalars()
-                .first()
-            )
+        # -------------------------------------------------
+        # 3. Convert NumPy array to bytes
+        # -------------------------------------------------
 
-            if existing_memory:
+        embedding_bytes = pickle.dumps(
+            embedding
+        )
 
-                # Replace the old value
-                existing_memory.value = value
-                existing_memory.category = category
-                existing_memory.importance = importance
-
-                self.session.commit()
-                self.session.refresh(existing_memory)
-
-                return existing_memory, "updated"
-
-        # ---------------------------------------------------------
-        # 3. No duplicate and no existing single-value memory
-        #    → create a new memory
-        # ---------------------------------------------------------
+        # -------------------------------------------------
+        # 4. Create memory
+        # -------------------------------------------------
 
         memory = Memory(
             subject=subject,
@@ -104,11 +77,14 @@ class MemoryStore:
             value=value,
             category=category,
             importance=importance,
-            active=True
+            active=True,
+            embedding=embedding_bytes
         )
 
         self.session.add(memory)
+
         self.session.commit()
+
         self.session.refresh(memory)
 
         return memory, "created"
@@ -139,30 +115,57 @@ class MemoryStore:
 
     def deactivate_memory(self, memory_id):
 
-        memory = self.session.get(Memory, memory_id)
+        statement = select(Memory).where(
+            Memory.id == memory_id
+        )
+
+        memory = (
+            self.session.execute(statement)
+            .scalars()
+            .first()
+        )
 
         if memory is None:
+
             return False
 
         memory.active = False
 
         self.session.commit()
 
-        return True   
+        return True
 
     def restore_memory(self, memory_id):
 
-        memory = self.session.get(Memory, memory_id)
+        statement = select(Memory).where(
+            Memory.id == memory_id
+        )
+
+        memory = (
+            self.session.execute(statement)
+            .scalars()
+            .first()
+        )
 
         if memory is None:
+
             return False
 
         memory.active = True
 
         self.session.commit()
-        self.session.refresh(memory)
 
         return True
+
+    def get_embedding(self, memory):
+
+        if memory.embedding is None:
+
+            return None
+
+        return pickle.loads(
+            memory.embedding
+        )
 
     def close(self):
 
