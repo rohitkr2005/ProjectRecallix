@@ -1,18 +1,13 @@
-import pickle
-
 from sqlalchemy import select
 
 from app.database.database import SessionLocal
 from app.database.models import Memory
-from app.embeddings.embedding_engine import EmbeddingEngine
 
 
 class MemoryStore:
 
     def __init__(self):
-
         self.session = SessionLocal()
-        self.embedding_engine = EmbeddingEngine()
 
     def save_memory(
         self,
@@ -20,56 +15,17 @@ class MemoryStore:
         relation,
         value,
         category,
-        importance=5
+        importance=5,
+        embedding=None
     ):
-
-        # -------------------------------------------------
-        # 1. Check for an exact active duplicate
-        # -------------------------------------------------
-
-        duplicate_statement = select(Memory).where(
-            Memory.subject == subject,
-            Memory.relation == relation,
-            Memory.value == value,
-            Memory.active.is_(True)
+        existing = self._find_active_memory(
+            subject=subject,
+            relation=relation,
+            value=value
         )
 
-        existing_memory = (
-            self.session.execute(
-                duplicate_statement
-            )
-            .scalars()
-            .first()
-        )
-
-        if existing_memory:
-
-            return existing_memory, "duplicate"
-
-        # -------------------------------------------------
-        # 2. Generate embedding
-        # -------------------------------------------------
-
-        embedding = (
-            self.embedding_engine.generate_memory_embedding(
-                subject=subject,
-                relation=relation,
-                value=value,
-                category=category
-            )
-        )
-
-        # -------------------------------------------------
-        # 3. Convert NumPy array to bytes
-        # -------------------------------------------------
-
-        embedding_bytes = pickle.dumps(
-            embedding
-        )
-
-        # -------------------------------------------------
-        # 4. Create memory
-        # -------------------------------------------------
+        if existing:
+            return existing, "duplicate"
 
         memory = Memory(
             subject=subject,
@@ -78,16 +34,33 @@ class MemoryStore:
             category=category,
             importance=importance,
             active=True,
-            embedding=embedding_bytes
+            embedding=embedding
         )
 
         self.session.add(memory)
-
         self.session.commit()
-
         self.session.refresh(memory)
 
         return memory, "created"
+
+    def _find_active_memory(
+        self,
+        subject,
+        relation,
+        value
+    ):
+        statement = select(Memory).where(
+            Memory.subject == subject,
+            Memory.relation == relation,
+            Memory.value == value,
+            Memory.active.is_(True)
+        )
+
+        return (
+            self.session.execute(statement)
+            .scalars()
+            .first()
+        )
 
     def get_all_memories(self):
 
@@ -113,59 +86,54 @@ class MemoryStore:
             .all()
         )
 
-    def deactivate_memory(self, memory_id):
+    def get_embedding(self, memory):
 
-        statement = select(Memory).where(
-            Memory.id == memory_id
-        )
+        if memory.embedding is None:
+            return None
 
-        memory = (
-            self.session.execute(statement)
-            .scalars()
-            .first()
-        )
+        return memory.embedding
+
+    def update_embedding(self, memory_id, embedding):
+
+        memory = self.session.get(Memory, memory_id)
 
         if memory is None:
+            return False
 
+        memory.embedding = embedding
+
+        self.session.commit()
+        self.session.refresh(memory)
+
+        return True
+
+    def deactivate_memory(self, memory_id):
+
+        memory = self.session.get(Memory, memory_id)
+
+        if memory is None:
             return False
 
         memory.active = False
 
         self.session.commit()
+        self.session.refresh(memory)
 
         return True
 
     def restore_memory(self, memory_id):
 
-        statement = select(Memory).where(
-            Memory.id == memory_id
-        )
-
-        memory = (
-            self.session.execute(statement)
-            .scalars()
-            .first()
-        )
+        memory = self.session.get(Memory, memory_id)
 
         if memory is None:
-
             return False
 
         memory.active = True
 
         self.session.commit()
+        self.session.refresh(memory)
 
         return True
-
-    def get_embedding(self, memory):
-
-        if memory.embedding is None:
-
-            return None
-
-        return pickle.loads(
-            memory.embedding
-        )
 
     def close(self):
 
