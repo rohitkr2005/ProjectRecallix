@@ -1,3 +1,6 @@
+import math
+from datetime import datetime
+
 import numpy as np
 
 from app.embeddings.embedding_engine import EmbeddingEngine
@@ -7,7 +10,6 @@ from app.memory.memory_store import MemoryStore
 class RetrievalEngine:
 
     def __init__(self, memory_store=None, embedding_engine=None):
-
         self.memory_store = memory_store or MemoryStore()
         self.embedding_engine = embedding_engine or EmbeddingEngine()
 
@@ -102,6 +104,25 @@ class RetrievalEngine:
 
         query_lower = query.lower()
 
+        # Goal-related phrases are checked first because
+        # phrases such as "want to learn" also contain "learn".
+        if any(
+            phrase in query_lower
+            for phrase in [
+                "want to learn",
+                "want to become",
+                "want to build",
+                "wants to learn",
+                "wants to become",
+                "wants to build",
+                "goal",
+                "want",
+                "wants",
+                "wish"
+            ]
+        ):
+            return "GOAL"
+
         if any(
             word in query_lower
             for word in [
@@ -161,18 +182,97 @@ class RetrievalEngine:
         ):
             return "SKILL"
 
-        if any(
-            word in query_lower
-            for word in [
-                "goal",
-                "want",
-                "wants",
-                "wish"
-            ]
-        ):
-            return "GOAL"
-
         return None
+
+    def _calculate_importance_score(self, memory):
+
+        importance = memory.importance
+
+        if importance is None:
+            importance = 5
+
+        try:
+            importance = float(importance)
+
+        except (TypeError, ValueError):
+            importance = 5.0
+
+        importance = min(
+            max(importance, 1.0),
+            10.0
+        )
+
+        return (importance - 1.0) / 9.0
+
+    def _calculate_recency_score(self, memory):
+
+        timestamp = memory.updated_at or memory.created_at
+
+        if timestamp is None:
+            return 0.0
+
+        now = datetime.utcnow()
+
+        if timestamp.tzinfo is not None and now.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=None)
+
+        age_seconds = max(
+            0.0,
+            (now - timestamp).total_seconds()
+        )
+
+        age_days = age_seconds / 86400.0
+
+        # A 30-day half-life keeps recent memories slightly favored
+        # without allowing old but important memories to disappear.
+        half_life_days = 30.0
+
+        return math.exp(
+            -math.log(2.0) * age_days / half_life_days
+        )
+
+    def _calculate_relationship_score(
+        self,
+        memory,
+        query_intent
+    ):
+
+        if query_intent is None:
+            return 0.0
+
+        intent_relations = {
+            "PROJECT": {
+                "works_on"
+            },
+            "EDUCATION": {
+                "studies"
+            },
+            "LOCATION": {
+                "lives_in"
+            },
+            "PREFERENCE": {
+                "likes"
+            },
+            "SKILL": {
+                "knows"
+            },
+            "GOAL": {
+                "wants_to_learn",
+                "wants_to_become",
+                "wants_to_build"
+            },
+        }
+
+        if memory.relation in intent_relations.get(
+            query_intent,
+            set()
+        ):
+            return 1.0
+
+        if memory.category == query_intent:
+            return 0.5
+
+        return 0.0
 
     def _calculate_final_score(
         self,
@@ -181,26 +281,30 @@ class RetrievalEngine:
         query_intent
     ):
 
-        final_score = semantic_score
+        importance_score = (
+            self._calculate_importance_score(memory)
+        )
 
-        if query_intent is not None:
+        recency_score = (
+            self._calculate_recency_score(memory)
+        )
 
-            if memory.category == query_intent:
-                final_score += 0.15
+        relationship_score = (
+            self._calculate_relationship_score(
+                memory,
+                query_intent
+            )
+        )
 
-            elif (
-                query_intent == "PROJECT"
-                and memory.relation == "works_on"
-            ):
-                final_score += 0.20
-
-            elif (
-                query_intent == "LOCATION"
-                and memory.relation == "lives_in"
-            ):
-                final_score += 0.20
-
-        return final_score
+        # Semantic similarity remains the strongest signal.
+        # Additional signals provide intelligent tie-breaking
+        # and contextual ranking.
+        return (
+            semantic_score
+            + (0.10 * importance_score)
+            + (0.10 * recency_score)
+            + (0.20 * relationship_score)
+        )
 
     def search(
         self,
