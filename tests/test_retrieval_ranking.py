@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
 
+import numpy as np
+
 from app.database.models import Memory
 from app.retrieval.retrieval_engine import RetrievalEngine
 
@@ -354,3 +356,481 @@ def test_all_ranking_signals_favor_relevant_memory():
     )
 
     assert strong_score > weak_score
+    
+def test_final_score_ranks_relevant_memory_higher():
+    engine = create_engine()
+
+    highly_relevant = create_memory(
+        relation="works_on",
+        category="PROJECT",
+        importance=10,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
+
+    less_relevant = create_memory(
+        relation="likes",
+        category="PERSONAL",
+        importance=3,
+        created_at=datetime.utcnow() - timedelta(days=60),
+        updated_at=datetime.utcnow() - timedelta(days=60)
+    )
+
+    semantic_score = 0.5
+
+    high_score = engine._calculate_final_score(
+        semantic_score,
+        highly_relevant,
+        "PROJECT"
+    )
+
+    low_score = engine._calculate_final_score(
+        semantic_score,
+        less_relevant,
+        "PROJECT"
+    )
+
+    assert high_score > low_score
+
+
+def test_semantic_similarity_affects_final_ranking():
+    engine = create_engine()
+
+    memory = create_memory(
+        relation="works_on",
+        category="PROJECT",
+        importance=5,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
+
+    low_semantic_score = engine._calculate_final_score(
+        0.2,
+        memory,
+        "PROJECT"
+    )
+
+    high_semantic_score = engine._calculate_final_score(
+        0.9,
+        memory,
+        "PROJECT"
+    )
+
+    assert high_semantic_score > low_semantic_score
+
+
+def test_relationship_relevance_can_outweigh_equal_semantic_score():
+    engine = create_engine()
+
+    project_memory = create_memory(
+        relation="works_on",
+        category="PROJECT",
+        importance=5,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
+
+    unrelated_memory = create_memory(
+        relation="likes",
+        category="PERSONAL",
+        importance=5,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
+
+    semantic_score = 0.5
+
+    project_score = engine._calculate_final_score(
+        semantic_score,
+        project_memory,
+        "PROJECT"
+    )
+
+    unrelated_score = engine._calculate_final_score(
+        semantic_score,
+        unrelated_memory,
+        "PROJECT"
+    )
+
+    assert project_score > unrelated_score
+
+
+def test_recent_memory_ranks_higher_than_old_memory():
+    engine = create_engine()
+
+    recent_memory = create_memory(
+        importance=5,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
+
+    old_memory = create_memory(
+        importance=5,
+        created_at=datetime.utcnow() - timedelta(days=60),
+        updated_at=datetime.utcnow() - timedelta(days=60)
+    )
+
+    semantic_score = 0.5
+
+    recent_score = engine._calculate_final_score(
+        semantic_score,
+        recent_memory,
+        None
+    )
+
+    old_score = engine._calculate_final_score(
+        semantic_score,
+        old_memory,
+        None
+    )
+
+    assert recent_score > old_score
+    
+class DummySearchEmbeddingEngine:
+    def __init__(self, query_embedding):
+        self.query_embedding = query_embedding
+
+    def generate_embedding(self, text):
+        return self.query_embedding
+
+
+class DummySearchMemoryStore:
+    def __init__(self, memories):
+        self.memories = memories
+
+    def get_all_memories(self):
+        return self.memories
+
+    def get_embedding(self, memory):
+        return memory.embedding
+
+    def close(self):
+        pass
+
+
+def create_search_memory(
+    relation,
+    category,
+    importance,
+    embedding,
+    created_at=None,
+    updated_at=None
+):
+    memory = create_memory(
+        relation=relation,
+        category=category,
+        importance=importance,
+        created_at=created_at,
+        updated_at=updated_at
+    )
+
+    memory.embedding = embedding
+
+    return memory
+
+
+def test_search_returns_results_in_ranking_order():
+    query_embedding = np.zeros(384, dtype=np.float32)
+    query_embedding[0] = 1.0
+
+    highly_similar = np.zeros(384, dtype=np.float32)
+    highly_similar[0] = 1.0
+
+    weakly_similar = np.zeros(384, dtype=np.float32)
+    weakly_similar[1] = 1.0
+
+    memory_1 = create_search_memory(
+        relation="works_on",
+        category="PROJECT",
+        importance=10,
+        embedding=weakly_similar
+    )
+
+    memory_2 = create_search_memory(
+        relation="works_on",
+        category="PROJECT",
+        importance=10,
+        embedding=highly_similar
+    )
+
+    store = DummySearchMemoryStore(
+        [memory_1, memory_2]
+    )
+
+    engine = RetrievalEngine(
+        memory_store=store,
+        embedding_engine=DummySearchEmbeddingEngine(
+            query_embedding
+        )
+    )
+
+    results = engine.search(
+        "What projects am I working on?"
+    )
+
+    assert len(results) == 2
+
+    assert results[0]["memory"] is memory_2
+    assert results[1]["memory"] is memory_1
+
+    assert results[0]["score"] > results[1]["score"]
+    
+def test_search_respects_top_k():
+    query_embedding = np.zeros(384, dtype=np.float32)
+    query_embedding[0] = 1.0
+
+    memories = []
+
+    for _ in range(5):
+        embedding = np.zeros(384, dtype=np.float32)
+        embedding[0] = 1.0
+
+        memories.append(
+            create_search_memory(
+                relation="works_on",
+                category="PROJECT",
+                importance=5,
+                embedding=embedding
+            )
+        )
+
+    store = DummySearchMemoryStore(memories)
+
+    engine = RetrievalEngine(
+        memory_store=store,
+        embedding_engine=DummySearchEmbeddingEngine(
+            query_embedding
+        )
+    )
+
+    results = engine.search(
+        "What projects am I working on?",
+        top_k=2
+    )
+
+    assert len(results) == 2
+    
+def test_search_respects_min_score():
+    query_embedding = np.zeros(384, dtype=np.float32)
+    query_embedding[0] = 1.0
+
+    good_embedding = np.zeros(384, dtype=np.float32)
+    good_embedding[0] = 1.0
+
+    poor_embedding = np.zeros(384, dtype=np.float32)
+    poor_embedding[1] = 1.0
+
+    good_memory = create_search_memory(
+        relation="works_on",
+        category="PROJECT",
+        importance=10,
+        embedding=good_embedding
+    )
+
+    poor_memory = create_search_memory(
+        relation="likes",
+        category="PERSONAL",
+        importance=1,
+        embedding=poor_embedding
+    )
+
+    store = DummySearchMemoryStore(
+        [good_memory, poor_memory]
+    )
+
+    engine = RetrievalEngine(
+        memory_store=store,
+        embedding_engine=DummySearchEmbeddingEngine(
+            query_embedding
+        )
+    )
+
+    results = engine.search(
+        "What projects am I working on?",
+        min_score=1.0
+    )
+
+    assert len(results) == 1
+    assert results[0]["memory"] is good_memory
+    assert results[0]["score"] >= 1.0
+    
+def test_search_empty_query_returns_empty_list():
+    store = DummySearchMemoryStore([])
+
+    engine = RetrievalEngine(
+        memory_store=store,
+        embedding_engine=DummySearchEmbeddingEngine(
+            np.zeros(384, dtype=np.float32)
+        )
+    )
+
+    assert engine.search("") == []
+    assert engine.search("   ") == []
+    
+def test_search_invalid_top_k_returns_empty_list():
+    store = DummySearchMemoryStore([])
+
+    engine = RetrievalEngine(
+        memory_store=store,
+        embedding_engine=DummySearchEmbeddingEngine(
+            np.zeros(384, dtype=np.float32)
+        )
+    )
+
+    assert engine.search(
+        "What do I like?",
+        top_k=0
+    ) == []
+
+    assert engine.search(
+        "What do I like?",
+        top_k=-1
+    ) == []
+    
+    
+def test_context_can_break_a_close_semantic_match():
+    engine = create_engine()
+
+    relevant_memory = create_memory(
+        relation="works_on",
+        category="PROJECT",
+        importance=10,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
+
+    unrelated_memory = create_memory(
+        relation="likes",
+        category="PERSONAL",
+        importance=5,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow()
+    )
+
+    semantic_score_relevant = 0.80
+    semantic_score_unrelated = 0.82
+
+    relevant_score = engine._calculate_final_score(
+        semantic_score_relevant,
+        relevant_memory,
+        "PROJECT"
+    )
+
+    unrelated_score = engine._calculate_final_score(
+        semantic_score_unrelated,
+        unrelated_memory,
+        "PROJECT"
+    )
+
+    assert relevant_score > unrelated_score
+    
+def test_irrelevant_memory_does_not_change_relevant_ranking():
+    query_embedding = np.zeros(384, dtype=np.float32)
+    query_embedding[0] = 1.0
+
+    first_embedding = np.zeros(384, dtype=np.float32)
+    first_embedding[0] = 0.95
+    first_embedding[1] = 0.05
+
+    second_embedding = np.zeros(384, dtype=np.float32)
+    second_embedding[0] = 0.80
+    second_embedding[1] = 0.60
+
+    irrelevant_embedding = np.zeros(384, dtype=np.float32)
+    irrelevant_embedding[2] = 1.0
+
+    first_memory = create_search_memory(
+        relation="works_on",
+        category="PROJECT",
+        importance=10,
+        embedding=first_embedding
+    )
+
+    second_memory = create_search_memory(
+        relation="works_on",
+        category="PROJECT",
+        importance=8,
+        embedding=second_embedding
+    )
+
+    irrelevant_memory = create_search_memory(
+        relation="likes",
+        category="PERSONAL",
+        importance=1,
+        embedding=irrelevant_embedding
+    )
+
+    engine_without_irrelevant = RetrievalEngine(
+        memory_store=DummySearchMemoryStore(
+            [first_memory, second_memory]
+        ),
+        embedding_engine=DummySearchEmbeddingEngine(
+            query_embedding
+        )
+    )
+
+    engine_with_irrelevant = RetrievalEngine(
+        memory_store=DummySearchMemoryStore(
+            [
+                first_memory,
+                second_memory,
+                irrelevant_memory
+            ]
+        ),
+        embedding_engine=DummySearchEmbeddingEngine(
+            query_embedding
+        )
+    )
+
+    results_without = engine_without_irrelevant.search(
+        "What projects am I working on?"
+    )
+
+    results_with = engine_with_irrelevant.search(
+        "What projects am I working on?"
+    )
+
+    assert results_without[0]["memory"] is first_memory
+    assert results_without[1]["memory"] is second_memory
+
+    assert results_with[0]["memory"] is first_memory
+    assert results_with[1]["memory"] is second_memory
+    
+def test_equal_score_memories_preserve_input_order():
+    query_embedding = np.zeros(384, dtype=np.float32)
+    query_embedding[0] = 1.0
+
+    embedding = np.zeros(384, dtype=np.float32)
+    embedding[0] = 1.0
+
+    first_memory = create_search_memory(
+        relation="works_on",
+        category="PROJECT",
+        importance=5,
+        embedding=embedding
+    )
+
+    second_memory = create_search_memory(
+        relation="works_on",
+        category="PROJECT",
+        importance=5,
+        embedding=embedding
+    )
+
+    store = DummySearchMemoryStore(
+        [first_memory, second_memory]
+    )
+
+    engine = RetrievalEngine(
+        memory_store=store,
+        embedding_engine=DummySearchEmbeddingEngine(
+            query_embedding
+        )
+    )
+
+    results = engine.search(
+        "What projects am I working on?"
+    )
+
+    assert results[0]["memory"] is first_memory
+    assert results[1]["memory"] is second_memory
