@@ -917,3 +917,312 @@ def test_search_semantic_threshold_does_not_replace_min_score():
     )
 
     assert results == []
+    
+def test_search_top_k_returns_only_best_memory():
+    query_embedding = np.zeros(384, dtype=np.float32)
+    query_embedding[0] = 1.0
+
+    best_embedding = np.zeros(384, dtype=np.float32)
+    best_embedding[0] = 1.0
+
+    weaker_embedding = np.zeros(384, dtype=np.float32)
+    weaker_embedding[0] = 0.8
+    weaker_embedding[1] = 0.6
+
+    best_memory = create_search_memory(
+        relation="works_on",
+        category="PROJECT",
+        importance=5,
+        embedding=best_embedding
+    )
+
+    weaker_memory = create_search_memory(
+        relation="likes",
+        category="PREFERENCE",
+        importance=5,
+        embedding=weaker_embedding
+    )
+
+    store = DummySearchMemoryStore(
+        [best_memory, weaker_memory]
+    )
+
+    engine = RetrievalEngine(
+        memory_store=store,
+        embedding_engine=DummySearchEmbeddingEngine(
+            query_embedding
+        )
+    )
+
+    results = engine.search(
+        "What projects am I working on?",
+        top_k=1
+    )
+
+    assert len(results) == 1
+    assert results[0]["memory"] is best_memory
+
+
+def test_search_top_k_returns_best_n_memories():
+    query_embedding = np.zeros(384, dtype=np.float32)
+    query_embedding[0] = 1.0
+
+    embeddings = []
+
+    for value in [1.0, 0.9, 0.8, 0.7]:
+        embedding = np.zeros(384, dtype=np.float32)
+        embedding[0] = value
+        embeddings.append(embedding)
+
+    memories = [
+        create_search_memory(
+            relation="works_on",
+            category="PROJECT",
+            importance=5,
+            embedding=embedding
+        )
+        for embedding in embeddings
+    ]
+
+    store = DummySearchMemoryStore(memories)
+
+    engine = RetrievalEngine(
+        memory_store=store,
+        embedding_engine=DummySearchEmbeddingEngine(
+            query_embedding
+        )
+    )
+
+    results = engine.search(
+        "What projects am I working on?",
+        top_k=3
+    )
+
+    assert len(results) == 3
+
+    assert results[0]["memory"] is memories[0]
+    assert results[1]["memory"] is memories[1]
+    assert results[2]["memory"] is memories[2]
+
+
+def test_search_top_k_larger_than_available_returns_all():
+    query_embedding = np.zeros(384, dtype=np.float32)
+    query_embedding[0] = 1.0
+
+    embedding = np.zeros(384, dtype=np.float32)
+    embedding[0] = 1.0
+
+    memory = create_search_memory(
+        relation="works_on",
+        category="PROJECT",
+        importance=5,
+        embedding=embedding
+    )
+
+    store = DummySearchMemoryStore(
+        [memory]
+    )
+
+    engine = RetrievalEngine(
+        memory_store=store,
+        embedding_engine=DummySearchEmbeddingEngine(
+            query_embedding
+        )
+    )
+
+    results = engine.search(
+        "What projects am I working on?",
+        top_k=10
+    )
+
+    assert len(results) == 1
+    assert results[0]["memory"] is memory
+    
+def test_search_top_k_zero_returns_empty():
+    query_embedding = np.zeros(384, dtype=np.float32)
+    query_embedding[0] = 1.0
+
+    embedding = np.zeros(384, dtype=np.float32)
+    embedding[0] = 1.0
+
+    memory = create_search_memory(
+        relation="works_on",
+        category="PROJECT",
+        importance=5,
+        embedding=embedding
+    )
+
+    store = DummySearchMemoryStore([memory])
+
+    engine = RetrievalEngine(
+        memory_store=store,
+        embedding_engine=DummySearchEmbeddingEngine(
+            query_embedding
+        )
+    )
+
+    results = engine.search(
+        "What projects am I working on?",
+        top_k=0
+    )
+
+    assert results == []
+
+
+def test_search_negative_top_k_returns_empty():
+    query_embedding = np.zeros(384, dtype=np.float32)
+    query_embedding[0] = 1.0
+
+    embedding = np.zeros(384, dtype=np.float32)
+    embedding[0] = 1.0
+
+    memory = create_search_memory(
+        relation="works_on",
+        category="PROJECT",
+        importance=5,
+        embedding=embedding
+    )
+
+    store = DummySearchMemoryStore([memory])
+
+    engine = RetrievalEngine(
+        memory_store=store,
+        embedding_engine=DummySearchEmbeddingEngine(
+            query_embedding
+        )
+    )
+
+    results = engine.search(
+        "What projects am I working on?",
+        top_k=-1
+    )
+
+    assert results == []
+
+
+def test_semantic_threshold_is_applied_before_top_k():
+    query_embedding = np.zeros(384, dtype=np.float32)
+    query_embedding[0] = 1.0
+
+    strong_embedding = np.zeros(384, dtype=np.float32)
+    strong_embedding[0] = 1.0
+
+    weak_embedding = np.zeros(384, dtype=np.float32)
+    weak_embedding[1] = 1.0
+
+    strong_memory = create_search_memory(
+        relation="works_on",
+        category="PROJECT",
+        importance=5,
+        embedding=strong_embedding
+    )
+
+    weak_memory = create_search_memory(
+        relation="likes",
+        category="PREFERENCE",
+        importance=10,
+        embedding=weak_embedding
+    )
+
+    store = DummySearchMemoryStore(
+        [strong_memory, weak_memory]
+    )
+
+    engine = RetrievalEngine(
+        memory_store=store,
+        embedding_engine=DummySearchEmbeddingEngine(
+            query_embedding
+        )
+    )
+
+    results = engine.search(
+        "What projects am I working on?",
+        top_k=1,
+        semantic_threshold=0.5
+    )
+
+    assert len(results) == 1
+    assert results[0]["memory"] is strong_memory
+
+
+def test_min_score_is_applied_before_top_k():
+    query_embedding = np.zeros(384, dtype=np.float32)
+    query_embedding[0] = 1.0
+
+    embedding = np.zeros(384, dtype=np.float32)
+    embedding[0] = 1.0
+
+    high_score_memory = create_search_memory(
+        relation="works_on",
+        category="PROJECT",
+        importance=10,
+        embedding=embedding
+    )
+
+    low_score_memory = create_search_memory(
+        relation="likes",
+        category="PERSONAL",
+        importance=1,
+        embedding=embedding
+    )
+
+    store = DummySearchMemoryStore(
+        [high_score_memory, low_score_memory]
+    )
+
+    engine = RetrievalEngine(
+        memory_store=store,
+        embedding_engine=DummySearchEmbeddingEngine(
+            query_embedding
+        )
+    )
+
+    results = engine.search(
+        "What projects am I working on?",
+        top_k=1,
+        min_score=1.25
+    )
+
+    assert len(results) == 1
+    assert results[0]["memory"] is high_score_memory
+
+
+def test_top_k_is_applied_after_score_sorting():
+    query_embedding = np.zeros(384, dtype=np.float32)
+    query_embedding[0] = 1.0
+
+    embedding = np.zeros(384, dtype=np.float32)
+    embedding[0] = 1.0
+
+    weaker_memory = create_search_memory(
+        relation="likes",
+        category="PERSONAL",
+        importance=1,
+        embedding=embedding
+    )
+
+    stronger_memory = create_search_memory(
+        relation="works_on",
+        category="PROJECT",
+        importance=10,
+        embedding=embedding
+    )
+
+    store = DummySearchMemoryStore(
+        [weaker_memory, stronger_memory]
+    )
+
+    engine = RetrievalEngine(
+        memory_store=store,
+        embedding_engine=DummySearchEmbeddingEngine(
+            query_embedding
+        )
+    )
+
+    results = engine.search(
+        "What projects am I working on?",
+        top_k=1
+    )
+
+    assert len(results) == 1
+    assert results[0]["memory"] is stronger_memory
