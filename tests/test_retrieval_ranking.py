@@ -803,18 +803,24 @@ def test_equal_score_memories_preserve_input_order():
     embedding = np.zeros(384, dtype=np.float32)
     embedding[0] = 1.0
 
+    same_timestamp = datetime.utcnow()
+
     first_memory = create_search_memory(
         relation="works_on",
         category="PROJECT",
         importance=5,
-        embedding=embedding
+        embedding=embedding,
+        created_at=same_timestamp,
+        updated_at=same_timestamp
     )
 
     second_memory = create_search_memory(
         relation="works_on",
         category="PROJECT",
         importance=5,
-        embedding=embedding
+        embedding=embedding,
+        created_at=same_timestamp,
+        updated_at=same_timestamp
     )
 
     store = DummySearchMemoryStore(
@@ -834,3 +840,80 @@ def test_equal_score_memories_preserve_input_order():
 
     assert results[0]["memory"] is first_memory
     assert results[1]["memory"] is second_memory
+    
+def test_search_respects_semantic_threshold():
+    query_embedding = np.zeros(384, dtype=np.float32)
+    query_embedding[0] = 1.0
+
+    relevant_embedding = np.zeros(384, dtype=np.float32)
+    relevant_embedding[0] = 1.0
+
+    weak_embedding = np.zeros(384, dtype=np.float32)
+    weak_embedding[1] = 1.0
+
+    relevant_memory = create_search_memory(
+        relation="works_on",
+        category="PROJECT",
+        importance=5,
+        embedding=relevant_embedding
+    )
+
+    weak_memory = create_search_memory(
+        relation="likes",
+        category="PERSONAL",
+        importance=5,
+        embedding=weak_embedding
+    )
+
+    store = DummySearchMemoryStore(
+        [relevant_memory, weak_memory]
+    )
+
+    engine = RetrievalEngine(
+        memory_store=store,
+        embedding_engine=DummySearchEmbeddingEngine(
+            query_embedding
+        )
+    )
+
+    results = engine.search(
+        "What projects am I working on?",
+        semantic_threshold=0.5
+    )
+
+    assert len(results) == 1
+    assert results[0]["memory"] is relevant_memory
+
+
+def test_search_semantic_threshold_does_not_replace_min_score():
+    query_embedding = np.zeros(384, dtype=np.float32)
+    query_embedding[0] = 1.0
+
+    embedding = np.zeros(384, dtype=np.float32)
+    embedding[0] = 1.0
+
+    memory = create_search_memory(
+        relation="works_on",
+        category="PROJECT",
+        importance=5,
+        embedding=embedding
+    )
+
+    store = DummySearchMemoryStore(
+        [memory]
+    )
+
+    engine = RetrievalEngine(
+        memory_store=store,
+        embedding_engine=DummySearchEmbeddingEngine(
+            query_embedding
+        )
+    )
+
+    results = engine.search(
+        "What projects am I working on?",
+        semantic_threshold=0.5,
+        min_score=2.0
+    )
+
+    assert results == []

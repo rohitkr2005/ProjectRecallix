@@ -310,7 +310,8 @@ class RetrievalEngine:
         self,
         query,
         top_k=5,
-        min_score=0.0
+        min_score=0.0,
+        semantic_threshold=0.0
     ):
 
         if not query or not query.strip():
@@ -347,6 +348,9 @@ class RetrievalEngine:
                 query_embedding,
                 memory_embedding
             )
+            
+            if semantic_score < semantic_threshold:
+                continue
 
             final_score = self._calculate_final_score(
                 semantic_score,
