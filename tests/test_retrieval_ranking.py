@@ -193,12 +193,18 @@ def test_final_score_uses_all_ranking_signals():
 
     recency_score = engine._calculate_recency_score(memory)
 
+    normalized_semantic_score = (
+        engine._normalize_semantic_score(
+            semantic_score
+        )
+    )
+
     expected_score = (
-        semantic_score
+        normalized_semantic_score
         + (0.10 * importance_score)
         + (0.10 * recency_score)
         + (0.20 * relationship_score)
-    )
+    ) / 1.40
 
     assert abs(final_score - expected_score) < 1e-6
 
@@ -647,7 +653,7 @@ def test_search_respects_min_score():
 
     results = engine.search(
         "What projects am I working on?",
-        min_score=1.0
+        min_score=0.95
     )
 
     assert len(results) == 1
@@ -972,6 +978,9 @@ def test_search_top_k_returns_best_n_memories():
     for value in [1.0, 0.9, 0.8, 0.7]:
         embedding = np.zeros(384, dtype=np.float32)
         embedding[0] = value
+        embedding[1] = np.sqrt(
+            max(0.0, 1.0 - value ** 2)
+        )
         embeddings.append(embedding)
 
     memories = [
@@ -1180,7 +1189,7 @@ def test_min_score_is_applied_before_top_k():
     results = engine.search(
         "What projects am I working on?",
         top_k=1,
-        min_score=1.25
+        min_score=0.85
     )
 
     assert len(results) == 1
@@ -1226,3 +1235,68 @@ def test_top_k_is_applied_after_score_sorting():
 
     assert len(results) == 1
     assert results[0]["memory"] is stronger_memory
+    
+def test_semantic_score_normalization_maps_negative_one_to_zero():
+    engine = create_engine()
+
+    normalized = engine._normalize_semantic_score(-1.0)
+
+    assert normalized == 0.0
+
+
+def test_semantic_score_normalization_maps_zero_to_half():
+    engine = create_engine()
+
+    normalized = engine._normalize_semantic_score(0.0)
+
+    assert normalized == 0.5
+
+
+def test_semantic_score_normalization_maps_one_to_one():
+    engine = create_engine()
+
+    normalized = engine._normalize_semantic_score(1.0)
+
+    assert normalized == 1.0
+
+
+def test_semantic_score_normalization_clamps_out_of_range_values():
+    engine = create_engine()
+
+    too_low = engine._normalize_semantic_score(-2.0)
+    too_high = engine._normalize_semantic_score(2.0)
+
+    assert too_low == 0.0
+    assert too_high == 1.0
+    
+def test_final_score_uses_normalized_semantic_score():
+    engine = create_engine()
+
+    memory = create_memory(
+        importance=1
+    )
+
+    score = engine._calculate_final_score(
+        semantic_score=-1.0,
+        memory=memory,
+        query_intent=None
+    )
+
+    assert 0.0 <= score <= 1.0
+
+
+def test_final_score_with_perfect_semantic_similarity_is_highest():
+    engine = create_engine()
+
+    memory = create_memory(
+        importance=10
+    )
+
+    score = engine._calculate_final_score(
+        semantic_score=1.0,
+        memory=memory,
+        query_intent=None
+    )
+
+    assert score <= 1.0
+    assert score > 0.7

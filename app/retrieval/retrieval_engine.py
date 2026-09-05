@@ -3,6 +3,7 @@ from datetime import datetime
 
 import numpy as np
 
+from app import memory
 from app.embeddings.embedding_engine import EmbeddingEngine
 from app.memory.memory_store import MemoryStore
 
@@ -70,6 +71,21 @@ class RetrievalEngine:
             np.dot(vector_a, vector_b)
             / (norm_a * norm_b)
         )
+        
+    def _normalize_semantic_score(self, semantic_score):
+
+        try:
+            semantic_score = float(semantic_score)
+
+        except (TypeError, ValueError):
+            return 0.0
+
+        semantic_score = min(
+            max(semantic_score, -1.0),
+            1.0
+        )
+
+        return (semantic_score + 1.0) / 2.0
 
     def _build_memory_text(self, memory):
 
@@ -281,6 +297,12 @@ class RetrievalEngine:
         query_intent
     ):
 
+        normalized_semantic_score = (
+            self._normalize_semantic_score(
+            semantic_score
+            )
+        )
+
         importance_score = (
             self._calculate_importance_score(memory)
         )
@@ -296,15 +318,18 @@ class RetrievalEngine:
             )
         )
 
-        # Semantic similarity remains the strongest signal.
-        # Additional signals provide intelligent tie-breaking
-        # and contextual ranking.
-        return (
-            semantic_score
+        weighted_score = (
+            normalized_semantic_score
             + (0.10 * importance_score)
             + (0.10 * recency_score)
             + (0.20 * relationship_score)
         )
+
+    # Maximum possible weighted score:
+    # 1.0 + 0.10 + 0.10 + 0.20 = 1.40
+    #
+    # Normalize final score to [0, 1].
+        return weighted_score / 1.40
 
     def search(
         self,
