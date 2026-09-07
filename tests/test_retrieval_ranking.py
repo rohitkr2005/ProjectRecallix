@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 
 import numpy as np
-
+import pytest
 from app.database.models import Memory
 from app.retrieval.retrieval_engine import RetrievalEngine
 
@@ -658,7 +658,7 @@ def test_search_respects_min_score():
 
     assert len(results) == 1
     assert results[0]["memory"] is good_memory
-    assert results[0]["score"] >= 1.0
+    assert results[0]["score"] == pytest.approx(1.0)
     
 def test_search_empty_query_returns_empty_list():
     store = DummySearchMemoryStore([])
@@ -1300,3 +1300,146 @@ def test_final_score_with_perfect_semantic_similarity_is_highest():
 
     assert score <= 1.0
     assert score > 0.7
+    
+    
+def test_tie_breaking_prefers_higher_semantic_score():
+    engine = create_engine()
+
+    memory_a = create_memory(
+        importance=5
+    )
+
+    memory_b = create_memory(
+        importance=5
+    )
+
+    memory_a.id = 1
+    memory_b.id = 2
+
+    memory_a.updated_at = datetime.utcnow()
+    memory_b.updated_at = memory_a.updated_at
+
+    results = [
+        {
+            "memory": memory_a,
+            "score": 0.8,
+            "semantic_score": 0.8
+        },
+        {
+            "memory": memory_b,
+            "score": 0.8,
+            "semantic_score": 0.6
+        }
+    ]
+
+    ranked = engine._sort_results(results)
+
+    assert ranked[0]["memory"] is memory_a
+    
+def test_tie_breaking_prefers_higher_importance():
+    engine = create_engine()
+
+    memory_a = create_memory(
+        importance=10
+    )
+
+    memory_b = create_memory(
+        importance=5
+    )
+
+    memory_a.id = 1
+    memory_b.id = 2
+
+    shared_timestamp = datetime.utcnow()
+
+    memory_a.updated_at = shared_timestamp
+    memory_b.updated_at = shared_timestamp
+
+    results = [
+        {
+            "memory": memory_a,
+            "score": 0.8,
+            "semantic_score": 0.7
+        },
+        {
+            "memory": memory_b,
+            "score": 0.8,
+            "semantic_score": 0.7
+        }
+    ]
+
+    ranked = engine._sort_results(results)
+
+    assert ranked[0]["memory"] is memory_a
+    
+def test_tie_breaking_prefers_more_recent_memory():
+    engine = create_engine()
+
+    older_time = datetime.utcnow() - timedelta(days=10)
+    newer_time = datetime.utcnow()
+
+    memory_a = create_memory(
+        importance=5,
+        updated_at=older_time
+    )
+
+    memory_b = create_memory(
+        importance=5,
+        updated_at=newer_time
+    )
+
+    memory_a.id = 1
+    memory_b.id = 2
+
+    results = [
+        {
+            "memory": memory_a,
+            "score": 0.8,
+            "semantic_score": 0.7
+        },
+        {
+            "memory": memory_b,
+            "score": 0.8,
+            "semantic_score": 0.7
+        }
+    ]
+
+    ranked = engine._sort_results(results)
+
+    assert ranked[0]["memory"] is memory_b
+
+
+def test_tie_breaking_prefers_lower_memory_id():
+    engine = create_engine()
+
+    shared_timestamp = datetime.utcnow()
+
+    memory_a = create_memory(
+        importance=5,
+        updated_at=shared_timestamp
+    )
+
+    memory_b = create_memory(
+        importance=5,
+        updated_at=shared_timestamp
+    )
+
+    memory_a.id = 1
+    memory_b.id = 2
+
+    results = [
+        {
+            "memory": memory_b,
+            "score": 0.8,
+            "semantic_score": 0.7
+        },
+        {
+            "memory": memory_a,
+            "score": 0.8,
+            "semantic_score": 0.7
+        }
+    ]
+
+    ranked = engine._sort_results(results)
+
+    assert ranked[0]["memory"] is memory_a

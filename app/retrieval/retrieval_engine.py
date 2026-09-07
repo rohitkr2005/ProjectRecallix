@@ -3,7 +3,6 @@ from datetime import datetime
 
 import numpy as np
 
-from app import memory
 from app.embeddings.embedding_engine import EmbeddingEngine
 from app.memory.memory_store import MemoryStore
 
@@ -71,7 +70,7 @@ class RetrievalEngine:
             np.dot(vector_a, vector_b)
             / (norm_a * norm_b)
         )
-        
+
     def _normalize_semantic_score(self, semantic_score):
 
         try:
@@ -299,7 +298,7 @@ class RetrievalEngine:
 
         normalized_semantic_score = (
             self._normalize_semantic_score(
-            semantic_score
+                semantic_score
             )
         )
 
@@ -325,11 +324,57 @@ class RetrievalEngine:
             + (0.20 * relationship_score)
         )
 
-    # Maximum possible weighted score:
-    # 1.0 + 0.10 + 0.10 + 0.20 = 1.40
-    #
-    # Normalize final score to [0, 1].
+        # Maximum possible weighted score:
+        # 1.0 + 0.10 + 0.10 + 0.20 = 1.40
+        #
+        # Normalize final score to [0, 1].
         return weighted_score / 1.40
+
+    def _sort_results(self, results):
+
+        def sort_key(item):
+
+            memory = item["memory"]
+
+            semantic_score = item.get(
+                "semantic_score",
+                0.0
+            )
+
+            importance_score = (
+                self._calculate_importance_score(memory)
+            )
+
+            timestamp = (
+                memory.updated_at
+                or memory.created_at
+            )
+
+            timestamp_value = (
+                timestamp.timestamp()
+                if timestamp is not None
+                else 0.0
+            )
+
+            memory_id = (
+                memory.id
+                if memory.id is not None
+                else float("inf")
+            )
+
+            return (
+                item["score"],
+                semantic_score,
+                importance_score,
+                timestamp_value,
+                -memory_id
+            )
+
+        return sorted(
+            results,
+            key=sort_key,
+            reverse=True
+        )
 
     def search(
         self,
@@ -373,7 +418,7 @@ class RetrievalEngine:
                 query_embedding,
                 memory_embedding
             )
-            
+
             if semantic_score < semantic_threshold:
                 continue
 
@@ -393,10 +438,7 @@ class RetrievalEngine:
                     }
                 )
 
-        results.sort(
-            key=lambda item: item["score"],
-            reverse=True
-        )
+        results = self._sort_results(results)
 
         return results[:top_k]
 
