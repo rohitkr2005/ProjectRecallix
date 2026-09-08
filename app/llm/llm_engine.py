@@ -106,8 +106,11 @@ class LLMEngine:
                 )
 
         except HTTPError as error:
+
             try:
-                error_body = error.read().decode("utf-8")
+                error_body = (
+                    error.read().decode("utf-8")
+                )
             except Exception:
                 error_body = str(error)
 
@@ -116,14 +119,21 @@ class LLMEngine:
             ) from error
 
         except (URLError, OSError) as error:
+
             raise RuntimeError(
                 "Unable to connect to Ollama. "
                 "Make sure Ollama is running on "
                 f"{self.base_url}."
             ) from error
 
-        message = result.get("message", {})
-        content = message.get("content")
+        message = result.get(
+            "message",
+            {}
+        )
+
+        content = message.get(
+            "content"
+        )
 
         if not content:
             raise RuntimeError(
@@ -148,25 +158,32 @@ class LLMEngine:
                 "User message cannot be empty."
             )
 
-        memory_context = self._build_memory_context(
-            memories
+        memory_context = (
+            self._build_memory_context(
+                memories
+            )
         )
 
         system_prompt = (
             "You are Recallix, an AI assistant with memory. "
-            "Use the provided memories when they are relevant. "
-            "Only state information directly supported by the provided memories. "
-            "Do not invent, infer, compare, rank, or assume facts that are not explicitly present. "
-            "If a memory is not relevant, ignore it. "
-            "Do not mention internal memory categories, "
-            "relevance scores, retrieval details, or system metadata. "
+            "Answer the user's question using only the explicitly "
+            "provided memory context. "
+            "Do not invent facts. "
+            "Do not infer facts that are not explicitly supported. "
+            "Do not treat general world knowledge as user memory. "
+            "If the provided memories do not contain enough information "
+            "to answer the question about the user, clearly say that "
+            "you do not have enough information. "
+            "Never claim an unsupported user fact. "
+            "Do not mention memory categories, relevance scores, "
+            "retrieval details, embeddings, or system metadata. "
             "Answer naturally, clearly, and directly."
         )
 
         prompt = (
-            f"Relevant memories:\n"
+            "Memory context:\n"
             f"{memory_context}\n\n"
-            f"User message:\n"
+            "User question:\n"
             f"{user_message.strip()}"
         )
 
@@ -179,7 +196,10 @@ class LLMEngine:
 
     def _build_memory_context(self, memories):
         """
-        Convert retrieved memory results into readable context.
+        Convert memory objects into clean LLM-ready context.
+
+        Internal metadata such as scores and categories are
+        intentionally excluded.
         """
 
         if not memories:
@@ -187,14 +207,21 @@ class LLMEngine:
 
         lines = []
 
-        for index, item in enumerate(
-            memories,
-            start=1,
-        ):
+        for item in memories:
+
+            if not isinstance(item, dict):
+                continue
+
             memory = item.get("memory")
-            score = item.get("score")
 
             if memory is None:
+                continue
+
+            if getattr(
+                memory,
+                "active",
+                True,
+            ) is not True:
                 continue
 
             subject = getattr(
@@ -215,25 +242,35 @@ class LLMEngine:
                 "",
             )
 
-            category = getattr(
-                memory,
-                "category",
-                "",
+            if not str(value).strip():
+                continue
+
+            relation_phrases = {
+                "likes": "likes",
+                "lives_in": "lives in",
+                "studies": "studies",
+                "studies_at": "studies at",
+                "works_at": "works at",
+                "current_role": "has the current role",
+                "current_city": "currently lives in",
+                "works_on": "works on",
+                "knows": "knows",
+                "wants_to_learn": "wants to learn",
+                "wants_to_become": "wants to become",
+                "wants_to_build": "wants to build",
+            }
+
+            relation_text = relation_phrases.get(
+                relation,
+                relation.replace(
+                    "_",
+                    " ",
+                ),
             )
 
-            if score is not None:
-                lines.append(
-                    f"{index}. "
-                    f"{subject} {relation} {value} "
-                    f"[{category}] "
-                    f"(relevance: {score:.3f})"
-                )
-            else:
-                lines.append(
-                    f"{index}. "
-                    f"{subject} {relation} {value} "
-                    f"[{category}]"
-                )
+            lines.append(
+                f"{subject} {relation_text} {value}."
+            )
 
         if not lines:
             return "No relevant memories found."
@@ -242,9 +279,7 @@ class LLMEngine:
 
     def close(self):
         """
-        Kept for interface compatibility.
-
         Ollama is managed as a separate local service,
-        so there is no client connection to close here.
+        so there is no client connection to close.
         """
         pass
