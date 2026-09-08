@@ -413,10 +413,19 @@ class RetrievalEngine:
 
             if memory_embedding is None:
                 continue
+            
+            deserialized_embedding = (
+                self._deserialize_embedding(
+                    memory_embedding
+                )
+            )
+
+            if deserialized_embedding is None:
+                continue
 
             semantic_score = self._cosine_similarity(
                 query_embedding,
-                memory_embedding
+                deserialized_embedding
             )
 
             if semantic_score < semantic_threshold:
