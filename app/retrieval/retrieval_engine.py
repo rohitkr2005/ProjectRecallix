@@ -16,13 +16,13 @@ class RetrievalEngine:
             r"\b(?:my|future)\s+goals?\b",
             r"\bwhat\s+do\s+i\s+want\b",
             r"\bwhat\s+are\s+my\s+(?:plans|ambitions|aspirations)\b",
+            r"\bwhat\s+am\s+i\s+planning\s+to\s+build\b",
             r"\b(?:goal|goals|wish|wishes|aspiration|aspirations)\b",
         ],
         "PROJECT": [
             r"\bwhat\s+(?:project|projects)\b",
             r"\bwhich\s+(?:project|projects)\b",
             r"\b(?:working|work)\s+on\b",
-            r"\b(?:building|build)\b",
             r"\bwhat\s+am\s+i\s+(?:working|building)\b",
         ],
         "EDUCATION": [
@@ -130,6 +130,24 @@ class RetrievalEngine:
                     scores[intent] += 1
         return scores
 
+    def _has_ambiguous_intent_signals(self, query):
+        """Detect mixed topic cues that make strict intent filtering unsafe."""
+        normalized_query = self._normalize_query(query)
+        if not normalized_query:
+            return False
+
+        preference_signal = bool(
+            re.search(r"\b(?:like|likes|love|enjoy|prefer|favorite|favourite)\b", normalized_query)
+        )
+        education_signal = bool(
+            re.search(r"\b(?:learn|learning|study|studying|education)\b", normalized_query)
+        )
+        project_signal = bool(
+            re.search(r"\bprojects?\b", normalized_query)
+        )
+
+        return sum((preference_signal, education_signal, project_signal)) >= 2
+
     def analyze_query_intent(self, query):
         """Return intent, confidence and whether strict filtering is safe."""
         normalized_query = self._normalize_query(query)
@@ -150,7 +168,8 @@ class RetrievalEngine:
         total = sum(scores.values())
         confidence = best_score / total if total else 0.0
         margin = (best_score - second_score) / best_score
-        strict = confidence >= 0.60 and margin >= 0.50
+        ambiguous = self._has_ambiguous_intent_signals(normalized_query)
+        strict = confidence >= 0.60 and margin >= 0.50 and not ambiguous
 
         return {
             "intent": best_intent,
