@@ -27,7 +27,9 @@ class RetrievalEngine:
         ],
         "EDUCATION": [
             r"\bwhat\s+(?:am\s+i\s+)?stud(?:y|ying)\b",
+            r"\bwhat\s+do\s+i\s+stud(?:y|ying)\b",
             r"\bwhat\s+(?:am\s+i\s+)?learn(?:ing)?\b",
+            r"\bwhat\s+do\s+i\s+learn(?:ing)?\b",
             r"\bwhere\s+do\s+i\s+stud(?:y|ying)\b",
             r"\bwhat\s+is\s+my\s+(?:education|degree|course|college|university)\b",
             r"\b(?:education|degree|course|college|university)\b",
