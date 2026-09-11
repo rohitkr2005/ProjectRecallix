@@ -84,6 +84,18 @@ class AssistantEngine:
                 return True
         return False
 
+    def _build_retrieval_explanations(self, memories):
+        """Return explainability metadata without exposing memory internals."""
+        explanations = []
+        for item in memories or []:
+            if not isinstance(item, dict):
+                continue
+            explanation = item.get("explanation")
+            if not isinstance(explanation, dict):
+                continue
+            explanations.append(dict(explanation))
+        return explanations
+
     def respond(
         self,
         user_message,
@@ -93,6 +105,7 @@ class AssistantEngine:
         temperature=0.2,
         max_tokens=500,
         memory_relevance=0.25,
+        include_explanations=False,
     ):
         if not user_message or not user_message.strip():
             raise ValueError("User message cannot be empty.")
@@ -117,8 +130,10 @@ class AssistantEngine:
             strict_intent=strict_intent,
         )
 
+        explanations = self._build_retrieval_explanations(retrieved_memories)
+
         if not self._has_supported_memories(relevant_memories):
-            return {
+            result = {
                 "response": "I don't have enough information in my memory to answer that.",
                 "memories": [],
                 "retrieved_memories": retrieved_memories,
@@ -127,6 +142,9 @@ class AssistantEngine:
                 "intent_strict": strict_intent,
                 "supported": False,
             }
+            if include_explanations:
+                result["retrieval_explanations"] = explanations
+            return result
 
         response = self.llm_engine.generate_with_memories(
             user_message=user_message,
@@ -135,7 +153,7 @@ class AssistantEngine:
             max_tokens=max_tokens,
         )
 
-        return {
+        result = {
             "response": response,
             "memories": relevant_memories,
             "retrieved_memories": retrieved_memories,
@@ -144,6 +162,9 @@ class AssistantEngine:
             "intent_strict": strict_intent,
             "supported": True,
         }
+        if include_explanations:
+            result["retrieval_explanations"] = explanations
+        return result
 
     def close(self):
         self.retrieval_engine.close()
