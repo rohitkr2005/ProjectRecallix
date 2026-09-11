@@ -225,18 +225,82 @@ class RetrievalEngine:
             return 0.5
         return 0.0
 
+    def _calculate_score_components(self, semantic_score, memory, query_intent):
+        """Return the normalized components used by the final ranking score."""
+        return {
+            "semantic": self._normalize_semantic_score(semantic_score),
+            "importance": self._calculate_importance_score(memory),
+            "recency": self._calculate_recency_score(memory),
+            "relationship": self._calculate_relationship_score(memory, query_intent),
+        }
+
     def _calculate_final_score(self, semantic_score, memory, query_intent):
-        normalized_semantic_score = self._normalize_semantic_score(semantic_score)
-        importance_score = self._calculate_importance_score(memory)
-        recency_score = self._calculate_recency_score(memory)
-        relationship_score = self._calculate_relationship_score(memory, query_intent)
+        components = self._calculate_score_components(
+            semantic_score,
+            memory,
+            query_intent
+        )
         weighted_score = (
-            normalized_semantic_score
-            + (0.10 * importance_score)
-            + (0.10 * recency_score)
-            + (0.20 * relationship_score)
+            components["semantic"]
+            + (0.10 * components["importance"])
+            + (0.10 * components["recency"])
+            + (0.20 * components["relationship"])
         )
         return weighted_score / 1.40
+
+    def _build_retrieval_explanation(
+        self,
+        semantic_score,
+        memory,
+        query_intent,
+        final_score=None
+    ):
+        """Build internal/debug metadata explaining why a memory ranked."""
+        components = self._calculate_score_components(
+            semantic_score,
+            memory,
+            query_intent
+        )
+
+        if final_score is None:
+            final_score = (
+                components["semantic"]
+                + (0.10 * components["importance"])
+                + (0.10 * components["recency"])
+                + (0.20 * components["relationship"])
+            ) / 1.40
+
+        reasons = []
+
+        if components["semantic"] >= 0.75:
+            reasons.append("high semantic similarity")
+        elif components["semantic"] >= 0.50:
+            reasons.append("moderate semantic similarity")
+        else:
+            reasons.append("low semantic similarity")
+
+        if components["relationship"] == 1.0:
+            reasons.append("direct intent relationship match")
+        elif components["relationship"] == 0.5:
+            reasons.append("intent category match")
+
+        if components["importance"] >= 0.75:
+            reasons.append("high importance")
+        elif components["importance"] < 0.25:
+            reasons.append("low importance")
+
+        if components["recency"] >= 0.75:
+            reasons.append("recent memory")
+        elif components["recency"] < 0.25:
+            reasons.append("older memory")
+
+        return {
+            "query_intent": query_intent,
+            "semantic_similarity": float(semantic_score),
+            "score_components": components,
+            "final_score": float(final_score),
+            "reasons": reasons,
+        }
 
     def _sort_results(self, results):
         def sort_key(item):
@@ -273,9 +337,24 @@ class RetrievalEngine:
             semantic_score = self._cosine_similarity(query_embedding, deserialized_embedding)
             if semantic_score < semantic_threshold:
                 continue
-            final_score = self._calculate_final_score(semantic_score, memory, query_intent)
+            final_score = self._calculate_final_score(
+                semantic_score,
+                memory,
+                query_intent
+            )
             if final_score >= min_score:
-                results.append({"memory": memory, "score": final_score, "semantic_score": semantic_score})
+                explanation = self._build_retrieval_explanation(
+                    semantic_score=semantic_score,
+                    memory=memory,
+                    query_intent=query_intent,
+                    final_score=final_score
+                )
+                results.append({
+                    "memory": memory,
+                    "score": final_score,
+                    "semantic_score": semantic_score,
+                    "explanation": explanation,
+                })
 
         return self._sort_results(results)[:top_k]
 
