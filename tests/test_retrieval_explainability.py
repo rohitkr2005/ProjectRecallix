@@ -51,11 +51,12 @@ def create_memory(
 
 
 def create_engine(memories=None, query_embedding=None):
+    if query_embedding is None:
+        query_embedding = np.ones(384, dtype=np.float32)
+
     return RetrievalEngine(
         memory_store=DummyMemoryStore(memories),
-        embedding_engine=DummyEmbeddingEngine(
-            query_embedding or np.ones(384, dtype=np.float32)
-        ),
+        embedding_engine=DummyEmbeddingEngine(query_embedding),
     )
 
 
