@@ -1,7 +1,10 @@
 """Run the curated retrieval benchmark against a retrieval/intent implementation."""
 
 from app.retrieval.retrieval_benchmark import RetrievalBenchmark
-from app.retrieval.retrieval_evaluator import RetrievalEvaluator
+from app.retrieval.retrieval_evaluator import (
+    RetrievalEvaluationCase,
+    RetrievalEvaluator,
+)
 
 
 class RetrievalBenchmarkRunner:
@@ -24,24 +27,13 @@ class RetrievalBenchmarkRunner:
     def run(self):
         cases = self.benchmark.get_cases()
 
-        evaluation_cases = [
-            type(case)(
-                id=case.id,
-                query=case.query,
-                expected_intent=case.expected_intent,
-                relevant_memory_ids=case.relevant_memory_ids,
-            )
-            for case in cases
-        ]
-
         retrieval_cases = [
-            __import__("app.retrieval.retrieval_evaluator", fromlist=["RetrievalEvaluationCase"])
-            .RetrievalEvaluationCase(
+            RetrievalEvaluationCase(
                 query=case.query,
                 relevant_memory_ids=case.relevant_memory_ids,
                 top_k=self.top_k,
             )
-            for case in evaluation_cases
+            for case in cases
         ]
 
         retrieval_result = self.evaluator.evaluate(retrieval_cases)
