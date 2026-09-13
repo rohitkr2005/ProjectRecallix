@@ -1,0 +1,43 @@
+{
+  "version": "1.0",
+  "description": "Curated retrieval benchmark for Project Recallix. Memory IDs are deterministic benchmark IDs and are not database IDs.",
+  "top_k": 5,
+  "memories": [
+    {"id": 1, "subject": "User", "relation": "works_on", "value": "Project Recallix", "category": "PROJECT", "importance": 10},
+    {"id": 2, "subject": "User", "relation": "works_on", "value": "driver monitoring system", "category": "PROJECT", "importance": 9},
+    {"id": 3, "subject": "User", "relation": "works_on", "value": "smart bus seat monitoring", "category": "PROJECT", "importance": 8},
+    {"id": 4, "subject": "User", "relation": "works_on", "value": "AI powered interior designer", "category": "PROJECT", "importance": 7},
+    {"id": 5, "subject": "User", "relation": "studies", "value": "B.Sc. (Hons.) Data Science", "category": "EDUCATION", "importance": 10},
+    {"id": 6, "subject": "User", "relation": "studies", "value": "Data Science and Visualization", "category": "EDUCATION", "importance": 8},
+    {"id": 7, "subject": "User", "relation": "studies", "value": "Image Processing", "category": "EDUCATION", "importance": 8},
+    {"id": 8, "subject": "User", "relation": "knows", "value": "Python", "category": "SKILL", "importance": 10},
+    {"id": 9, "subject": "User", "relation": "knows", "value": "SQL", "category": "SKILL", "importance": 9},
+    {"id": 10, "subject": "User", "relation": "knows", "value": "Machine Learning", "category": "SKILL", "importance": 9},
+    {"id": 11, "subject": "User", "relation": "knows", "value": "Power BI", "category": "SKILL", "importance": 7},
+    {"id": 12, "subject": "User", "relation": "wants_to_learn", "value": "advanced machine learning", "category": "GOAL", "importance": 9},
+    {"id": 13, "subject": "User", "relation": "wants_to_build", "value": "AI powered applications", "category": "GOAL", "importance": 8},
+    {"id": 14, "subject": "User", "relation": "wants_to_become", "value": "data scientist", "category": "GOAL", "importance": 10},
+    {"id": 15, "subject": "User", "relation": "lives_in", "value": "Delhi", "category": "LOCATION", "importance": 8},
+    {"id": 16, "subject": "User", "relation": "likes", "value": "football", "category": "PREFERENCE", "importance": 7},
+    {"id": 17, "subject": "User", "relation": "likes", "value": "building data science projects", "category": "PREFERENCE", "importance": 8},
+    {"id": 18, "subject": "User", "relation": "likes", "value": "working with Python", "category": "PREFERENCE", "importance": 7}
+  ],
+  "cases": [
+    {"id": "project_01", "query": "What projects am I working on?", "expected_intent": "PROJECT", "relevant_memory_ids": [1, 2, 3, 4]},
+    {"id": "project_02", "query": "Which projects am I currently building?", "expected_intent": "PROJECT", "relevant_memory_ids": [1, 2, 3, 4]},
+    {"id": "project_03", "query": "Tell me about the projects I work on", "expected_intent": "PROJECT", "relevant_memory_ids": [1, 2, 3, 4]},
+    {"id": "education_01", "query": "What am I studying?", "expected_intent": "EDUCATION", "relevant_memory_ids": [5, 6, 7]},
+    {"id": "education_02", "query": "What is my degree and course?", "expected_intent": "EDUCATION", "relevant_memory_ids": [5]},
+    {"id": "education_03", "query": "Which subjects do I study?", "expected_intent": "EDUCATION", "relevant_memory_ids": [6, 7]},
+    {"id": "skill_01", "query": "What programming skills do I know?", "expected_intent": "SKILL", "relevant_memory_ids": [8, 9, 10, 11]},
+    {"id": "skill_02", "query": "Which technologies and tools do I know?", "expected_intent": "SKILL", "relevant_memory_ids": [8, 9, 10, 11]},
+    {"id": "skill_03", "query": "What am I good at?", "expected_intent": "SKILL", "relevant_memory_ids": [8, 9, 10, 11]},
+    {"id": "goal_01", "query": "What do I want to learn?", "expected_intent": "GOAL", "relevant_memory_ids": [12]},
+    {"id": "goal_02", "query": "What are my future goals?", "expected_intent": "GOAL", "relevant_memory_ids": [12, 13, 14]},
+    {"id": "goal_03", "query": "What am I planning to build?", "expected_intent": "GOAL", "relevant_memory_ids": [13]},
+    {"id": "location_01", "query": "Where do I live?", "expected_intent": "LOCATION", "relevant_memory_ids": [15]},
+    {"id": "location_02", "query": "What is my city?", "expected_intent": "LOCATION", "relevant_memory_ids": [15]},
+    {"id": "preference_01", "query": "What sports do I like?", "expected_intent": "PREFERENCE", "relevant_memory_ids": [16]},
+    {"id": "preference_02", "query": "What do I like?", "expected_intent": "PREFERENCE", "relevant_memory_ids": [16, 17, 18]}
+  ]
+}
