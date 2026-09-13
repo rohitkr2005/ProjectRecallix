@@ -1,5 +1,7 @@
 """Run the curated retrieval benchmark against a retrieval/intent implementation."""
 
+from types import SimpleNamespace
+
 from app.retrieval.retrieval_benchmark import RetrievalBenchmark
 from app.retrieval.retrieval_evaluator import (
     RetrievalEvaluationCase,
@@ -23,6 +25,50 @@ class RetrievalBenchmarkRunner:
         self.benchmark = benchmark or RetrievalBenchmark()
         self.top_k = top_k
         self.evaluator = RetrievalEvaluator(search_fn)
+
+    @classmethod
+    def from_retrieval_engine(cls, engine, benchmark=None, top_k=5):
+        """Create a runner that evaluates the real RetrievalEngine.
+
+        Results are mapped to stable benchmark IDs using relation + value,
+        so database primary keys do not become part of the benchmark.
+        """
+        benchmark = benchmark or RetrievalBenchmark()
+        memory_map = {
+            (memory.relation, memory.value): memory.id
+            for memory in benchmark.memories
+        }
+
+        def search_fn(query, top_k=5):
+            results = engine.search(query, top_k=top_k)
+            mapped = []
+
+            for item in results:
+                memory = item.get("memory") if isinstance(item, dict) else None
+                if memory is None:
+                    continue
+
+                benchmark_id = memory_map.get(
+                    (memory.relation, memory.value)
+                )
+                if benchmark_id is None:
+                    continue
+
+                mapped_item = dict(item)
+                mapped_item["memory"] = SimpleNamespace(id=benchmark_id)
+                mapped.append(mapped_item)
+
+            return mapped
+
+        def intent_fn(query):
+            return engine.analyze_query_intent(query)
+
+        return cls(
+            search_fn=search_fn,
+            intent_fn=intent_fn,
+            benchmark=benchmark,
+            top_k=top_k,
+        )
 
     def run(self):
         cases = self.benchmark.get_cases()
