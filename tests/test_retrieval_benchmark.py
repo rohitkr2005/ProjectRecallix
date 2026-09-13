@@ -38,6 +38,30 @@ def perfect_intent(query, benchmark):
     return {"intent": case.expected_intent}
 
 
+class FakeRetrievalEngine:
+    def __init__(self, benchmark):
+        self.benchmark = benchmark
+        self.memory_map = benchmark.get_memory_map()
+
+    def search(self, query, top_k=5):
+        case = next(case for case in self.benchmark.get_cases() if case.query == query)
+        results = []
+
+        for memory_id in sorted(case.relevant_memory_ids)[:top_k]:
+            memory = self.memory_map[memory_id]
+            results.append({
+                "memory": memory,
+                "score": 0.9,
+                "semantic_score": 0.9,
+            })
+
+        return results
+
+    def analyze_query_intent(self, query):
+        case = next(case for case in self.benchmark.get_cases() if case.query == query)
+        return {"intent": case.expected_intent}
+
+
 def test_benchmark_loads_expected_dataset():
     benchmark = RetrievalBenchmark()
 
@@ -126,6 +150,21 @@ def test_benchmark_runner_produces_perfect_synthetic_baseline():
     assert result["retrieval"]["summary"]["hit_rate_at_k"] == 1.0
     assert result["retrieval"]["summary"]["mrr"] == 1.0
     assert result["retrieval"]["summary"]["ndcg_at_k"] == 1.0
+
+
+def test_benchmark_runner_can_adapt_a_retrieval_engine():
+    benchmark = RetrievalBenchmark()
+    engine = FakeRetrievalEngine(benchmark)
+
+    runner = RetrievalBenchmarkRunner.from_retrieval_engine(
+        engine,
+        benchmark=benchmark,
+    )
+
+    result = runner.run()
+
+    assert result["intent"]["accuracy"] == 1.0
+    assert result["retrieval"]["summary"]["hit_rate_at_k"] == 1.0
 
 
 def test_benchmark_runner_detects_intent_regression():
