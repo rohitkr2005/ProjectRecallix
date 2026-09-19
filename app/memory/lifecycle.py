@@ -1,5 +1,8 @@
+from datetime import datetime
 from enum import Enum
+import math
 from typing import Callable, Iterable, Optional, Tuple
+
 
 
 class MemoryLifecycleState(str, Enum):
@@ -238,4 +241,138 @@ def evaluate_archival_eligibility(
         return True, "eligible_by_policy"
 
     return False, "requires_explicit_user_action"
+
+
+def validate_importance(importance: Optional[int]) -> int:
+    """
+    Validate and clamp memory importance within the formal range [1, 10].
+    Defaults to 5 if None or unparseable.
+    """
+    if importance is None:
+        return 5
+    try:
+        val = int(importance)
+    except (TypeError, ValueError):
+        return 5
+    return max(1, min(10, val))
+
+
+def calculate_freshness_score(
+    memory,
+    reference_time: Optional[datetime] = None,
+    half_life_days: float = 30.0,
+    importance_damping: bool = True,
+) -> float:
+    """
+    Calculate memory freshness using exponential decay.
+    
+    If importance_damping is True, applies a floor proportional to memory importance
+    so that highly important or foundational memories do not decay to insignificance.
+    """
+    timestamp = getattr(memory, "updated_at", None) or getattr(memory, "created_at", None)
+    if timestamp is None:
+        return 0.0
+
+    ref = reference_time or datetime.utcnow()
+    if timestamp.tzinfo is not None and ref.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=None)
+
+    age_seconds = max(0.0, (ref - timestamp).total_seconds())
+    age_days = age_seconds / 86400.0
+
+    decay = math.exp(-math.log(2.0) * age_days / half_life_days)
+
+    if importance_damping:
+        importance = validate_importance(getattr(memory, "importance", 5))
+        # High importance (e.g. 10) provides a 0.30 floor; low importance provides near zero floor
+        importance_floor = ((importance - 1.0) / 9.0) * 0.30
+        decay = max(decay, importance_floor)
+
+    return min(1.0, max(0.0, float(decay)))
+
+
+def consolidate_memories(memories: Iterable) -> dict:
+    """
+    Consolidate active memories into structured, grounded knowledge groupings
+    by subject, category, and relation without synthesizing unsupported facts.
+    """
+    active = [m for m in memories if getattr(m, "active", False)]
+    by_subject = {}
+
+    for m in active:
+        s = getattr(m, "subject", "Unknown")
+        cat = getattr(m, "category", "GENERAL")
+        rel = getattr(m, "relation", "related_to")
+        val = getattr(m, "value", "")
+        m_id = getattr(m, "id", None)
+        imp = getattr(m, "importance", 5)
+
+        if s not in by_subject:
+            by_subject[s] = {
+                "subject": s,
+                "categories": {},
+                "relations": {},
+                "memory_ids": [],
+            }
+        by_subject[s]["memory_ids"].append(m_id)
+
+        if cat not in by_subject[s]["categories"]:
+            by_subject[s]["categories"][cat] = []
+        by_subject[s]["categories"][cat].append({
+            "relation": rel,
+            "value": val,
+            "importance": imp,
+            "memory_id": m_id,
+        })
+
+        if rel not in by_subject[s]["relations"]:
+            by_subject[s]["relations"][rel] = []
+        by_subject[s]["relations"][rel].append({
+            "value": val,
+            "category": cat,
+            "importance": imp,
+            "memory_id": m_id,
+        })
+
+    return {
+        "total_active_memories": len(active),
+        "subjects": by_subject,
+    }
+
+
+def build_conflict_lineage(memories: Iterable, relation: str) -> list[dict]:
+    """
+    Construct a chronological succession lineage for a single-value relation,
+    showing active state, supersession links, and timestamps.
+    """
+    matching = [
+        m for m in memories
+        if getattr(m, "relation", None) == relation
+    ]
+    sorted_mems = sorted(
+        matching,
+        key=lambda m: (
+            getattr(m, "created_at", None) or datetime.min,
+            getattr(m, "id", 0) or 0,
+        )
+    )
+
+    lineage = []
+    for i, mem in enumerate(sorted_mems):
+        next_mem = sorted_mems[i + 1] if i + 1 < len(sorted_mems) else None
+        state = "ACTIVE" if getattr(mem, "active", False) else "SUPERSEDED"
+        superseded_by = getattr(next_mem, "value", None) if state == "SUPERSEDED" and next_mem else None
+        lineage.append({
+            "memory_id": getattr(mem, "id", None),
+            "subject": getattr(mem, "subject", None),
+            "relation": relation,
+            "value": getattr(mem, "value", None),
+            "state": state,
+            "created_at": getattr(mem, "created_at", None),
+            "updated_at": getattr(mem, "updated_at", None),
+            "superseded_by": superseded_by,
+        })
+
+    return lineage
+
 

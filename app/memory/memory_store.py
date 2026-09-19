@@ -8,9 +8,12 @@ from app.memory.lifecycle import (
     MemoryLifecycleState,
     RestorationStrategy,
     UpdateSemanticsDecision,
+    build_conflict_lineage,
+    consolidate_memories as consolidate_memories_fn,
     determine_lifecycle_state,
     evaluate_archival_eligibility,
     evaluate_update_semantics,
+    validate_importance,
     validate_restoration_safety,
 )
 
@@ -520,5 +523,112 @@ class MemoryStore:
             })
         return history
 
+    def update_importance(self, memory_id, importance):
+        """
+        Validate and update memory importance in-place.
+        """
+        memory = self.session.get(Memory, memory_id)
+        if memory is None:
+            return False
+
+        memory.importance = validate_importance(importance)
+        memory.updated_at = datetime.utcnow()
+        self.session.commit()
+        self.session.refresh(memory)
+        return True
+
+    def cleanup_duplicates(self, subject=None, dry_run=False):
+        """
+        Detect and resolve active duplicates for the same (subject, relation, value).
+        Designates the canonical memory (highest importance, latest updated_at),
+        sets its importance to max(importances), and deactivates redundant duplicates.
+        """
+        statement = select(Memory).where(Memory.active.is_(True))
+        if subject is not None:
+            statement = statement.where(Memory.subject == subject)
+
+        active_memories = self.session.execute(statement).scalars().all()
+
+        # Group by (subject, relation, value)
+        groups = {}
+        for m in active_memories:
+            key = (m.subject, m.relation, m.value)
+            groups.setdefault(key, []).append(m)
+
+        cleaned_groups = 0
+        duplicates_deactivated = 0
+        details = []
+
+        for key, mem_list in groups.items():
+            if len(mem_list) <= 1:
+                continue
+
+            cleaned_groups += 1
+            # Sort by importance descending, updated_at descending, id ascending
+            sorted_mems = sorted(
+                mem_list,
+                key=lambda m: (
+                    m.importance if m.importance is not None else 5,
+                    m.updated_at if m.updated_at is not None else datetime.min,
+                    -m.id if m.id is not None else 0,
+                ),
+                reverse=True,
+            )
+
+            canonical = sorted_mems[0]
+            redundant = sorted_mems[1:]
+
+            max_imp = max(
+                (m.importance for m in mem_list if m.importance is not None),
+                default=5,
+            )
+
+            if not dry_run:
+                canonical.importance = max_imp
+                for red in redundant:
+                    red.active = False
+                self.session.commit()
+
+            duplicates_deactivated += len(redundant)
+            details.append({
+                "subject": key[0],
+                "relation": key[1],
+                "value": key[2],
+                "canonical_id": canonical.id,
+                "deactivated_ids": [r.id for r in redundant],
+                "canonical_importance": max_imp,
+            })
+
+        return {
+            "cleaned_groups": cleaned_groups,
+            "duplicates_deactivated": duplicates_deactivated,
+            "dry_run": dry_run,
+            "details": details,
+        }
+
+    def get_conflict_history(self, subject, relation):
+        """
+        Retrieve chronological conflict and supersession history for a single-value relation.
+        """
+        statement = select(Memory).where(
+            Memory.subject == subject,
+            Memory.relation == relation,
+        ).order_by(Memory.created_at.asc(), Memory.id.asc())
+
+        memories = self.session.execute(statement).scalars().all()
+        return build_conflict_lineage(memories, relation)
+
+    def consolidate_memories(self, subject=None):
+        """
+        Consolidate active memories into a grounded, structured knowledge profile.
+        """
+        statement = select(Memory).where(Memory.active.is_(True))
+        if subject is not None:
+            statement = statement.where(Memory.subject == subject)
+
+        active_memories = self.session.execute(statement).scalars().all()
+        return consolidate_memories_fn(active_memories)
+
     def close(self):
-        self.session.close()
+        self.session.close()
+
