@@ -1,3 +1,4 @@
+from datetime import datetime
 from sqlalchemy import select
 
 from app.database.database import SessionLocal
@@ -5,6 +6,7 @@ from app.database.models import Memory
 from app.memory.lifecycle import (
     ArchivalReason,
     MemoryLifecycleState,
+    RestorationStrategy,
     UpdateSemanticsDecision,
     determine_lifecycle_state,
     evaluate_archival_eligibility,
@@ -371,32 +373,117 @@ class MemoryStore:
             is_single_value_fn=self.is_single_value_relation,
         )
 
-    def restore_memory(self, memory_id, allow_conflict=False):
+    def restore_memory(
+        self,
+        memory_id,
+        strategy=RestorationStrategy.REJECT,
+        allow_conflict=False,
+    ):
         """
-        Safely restore an inactive memory. If allow_conflict is False,
-        prevents restoring a single-value memory when an active conflict exists.
+        Safely restore an inactive memory.
+        If allow_conflict is True, strategy is treated as SUPERSEDE_ACTIVE.
+        If strategy is SUPERSEDE_ACTIVE, conflicting active memory is deactivated.
         """
         memory = self.session.get(Memory, memory_id)
-
         if memory is None:
             return False
 
-        if not allow_conflict:
-            active_memories = self.get_all_memories()
-            can_restore, _ = validate_restoration_safety(
-                memory=memory,
-                active_memories=active_memories,
-                is_single_value_fn=self.is_single_value_relation,
-            )
-            if not can_restore:
-                return False
+        if allow_conflict:
+            strategy = RestorationStrategy.FORCE
+
+        active_memories = self.get_all_memories()
+        can_restore, reason, conflicting_mem = validate_restoration_safety(
+            memory=memory,
+            active_memories=active_memories,
+            is_single_value_fn=self.is_single_value_relation,
+            strategy=strategy,
+        )
+
+        if not can_restore:
+            return False
+
+        if conflicting_mem and strategy == RestorationStrategy.SUPERSEDE_ACTIVE:
+            conflicting_mem.active = False
 
         memory.active = True
+        memory.updated_at = datetime.utcnow()
+
+        self.session.commit()
+        self.session.refresh(memory)
+        return True
+
+    def restore_memory_with_details(
+        self,
+        memory_id,
+        strategy=RestorationStrategy.REJECT,
+        allow_conflict=False,
+    ):
+        """
+        Restore an inactive memory and return rich transition details.
+        Returns: (success: bool, status: str, details: dict)
+        """
+        memory = self.session.get(Memory, memory_id)
+        if memory is None:
+            return False, "memory_not_found", {}
+
+        if allow_conflict:
+            strategy = RestorationStrategy.FORCE
+
+
+        active_memories = self.get_all_memories()
+        can_restore, reason, conflicting_mem = validate_restoration_safety(
+            memory=memory,
+            active_memories=active_memories,
+            is_single_value_fn=self.is_single_value_relation,
+            strategy=strategy,
+        )
+
+        if not can_restore:
+            return False, reason, {
+                "restored_memory_id": memory.id,
+                "conflicting_memory_id": conflicting_mem.id if conflicting_mem else None,
+                "strategy_used": strategy,
+            }
+
+        superseded_id = None
+        if conflicting_mem and strategy == RestorationStrategy.SUPERSEDE_ACTIVE:
+            conflicting_mem.active = False
+            superseded_id = conflicting_mem.id
+
+        memory.active = True
+        memory.updated_at = datetime.utcnow()
 
         self.session.commit()
         self.session.refresh(memory)
 
-        return True
+        return True, "restored", {
+            "restored_memory_id": memory.id,
+            "superseded_memory_id": superseded_id,
+            "strategy_used": strategy,
+        }
+
+    def can_restore(
+        self,
+        memory_id,
+        strategy=RestorationStrategy.REJECT,
+    ):
+        """
+        Check if an inactive memory can be restored under a given strategy.
+        Returns: (can_restore: bool, reason: str)
+        """
+        memory = self.session.get(Memory, memory_id)
+        if memory is None:
+            return False, "memory_not_found"
+
+        active_memories = self.get_all_memories()
+        can_restore, reason, _ = validate_restoration_safety(
+            memory=memory,
+            active_memories=active_memories,
+            is_single_value_fn=self.is_single_value_relation,
+            strategy=strategy,
+        )
+        return can_restore, reason
+
 
     def get_superseded_memories(self):
         """Return all memories that have been superseded by newer active values."""

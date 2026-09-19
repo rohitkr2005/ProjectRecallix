@@ -73,34 +73,59 @@ def is_archived(
     return determine_lifecycle_state(memory, active_memories, is_single_value_fn) == MemoryLifecycleState.ARCHIVED
 
 
+class RestorationStrategy(str, Enum):
+    """
+    Strategies for restoring an inactive memory.
+    
+    REJECT: Safely rejects restoration if an active conflicting memory exists.
+    SUPERSEDE_ACTIVE: Deactivates the conflicting active memory and restores the target memory.
+    FORCE: Bypasses conflict checks and restores the memory directly.
+    """
+    REJECT = "REJECT"
+    SUPERSEDE_ACTIVE = "SUPERSEDE_ACTIVE"
+    FORCE = "FORCE"
+
+
 def validate_restoration_safety(
     memory,
     active_memories: Optional[Iterable] = None,
     is_single_value_fn: Optional[Callable[[str], bool]] = None,
-) -> Tuple[bool, str]:
+    strategy: RestorationStrategy = RestorationStrategy.REJECT,
+) -> Tuple[bool, str, Optional[any]]:
     """
     Validate whether an inactive memory can safely be restored without violating
     single-value constraints or active duplicate constraints.
     
     Returns:
-        (can_restore: bool, reason: str)
+        (can_restore: bool, reason: str, conflicting_memory: Optional[Memory])
     """
     if getattr(memory, "active", False):
-        return False, "already_active"
+        return False, "already_active", None
 
-    if is_single_value_fn and is_single_value_fn(getattr(memory, "relation", "")):
-        if active_memories:
-            for active_mem in active_memories:
-                if (
-                    getattr(active_mem, "active", False)
-                    and getattr(active_mem, "subject", None) == getattr(memory, "subject", None)
-                    and getattr(active_mem, "relation", None) == getattr(memory, "relation", None)
-                ):
-                    if getattr(active_mem, "value", None) == getattr(memory, "value", None):
-                        return False, f"duplicate_of_active_memory:{getattr(active_mem, 'id', None)}"
-                    return False, f"conflict_with_active_memory:{getattr(active_mem, 'id', None)}"
+    if strategy == RestorationStrategy.FORCE:
+        return True, "forced_restoration", None
 
-    return True, "safe_to_restore"
+    if active_memories:
+        for active_mem in active_memories:
+            if not getattr(active_mem, "active", False):
+                continue
+            if (
+                getattr(active_mem, "subject", None) == getattr(memory, "subject", None)
+                and getattr(active_mem, "relation", None) == getattr(memory, "relation", None)
+            ):
+                # Check for active duplicate
+                if getattr(active_mem, "value", None) == getattr(memory, "value", None):
+                    return False, f"duplicate_of_active_memory:{getattr(active_mem, 'id', None)}", active_mem
+
+                # Check for single-value conflict
+                if is_single_value_fn and is_single_value_fn(getattr(memory, "relation", "")):
+                    if strategy == RestorationStrategy.SUPERSEDE_ACTIVE:
+                        return True, f"supersede_active_conflict:{getattr(active_mem, 'id', None)}", active_mem
+                    return False, f"conflict_with_active_memory:{getattr(active_mem, 'id', None)}:{getattr(active_mem, 'value', None)}", active_mem
+
+    return True, "safe_to_restore", None
+
+
 
 
 class UpdateSemanticsDecision(str, Enum):
