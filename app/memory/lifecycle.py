@@ -101,3 +101,59 @@ def validate_restoration_safety(
                     return False, f"conflict_with_active_memory:{getattr(active_mem, 'id', None)}"
 
     return True, "safe_to_restore"
+
+
+class UpdateSemanticsDecision(str, Enum):
+    """
+    Decisions when new information arrives in Recallix.
+    
+    DUPLICATE: The identical memory already exists as active.
+    CONFLICT_SUPERSEDE: An active single-value memory exists with a different value.
+    NEW_MEMORY: A new memory that does not conflict or duplicate any active memory.
+    """
+    DUPLICATE = "DUPLICATE"
+    CONFLICT_SUPERSEDE = "CONFLICT_SUPERSEDE"
+    NEW_MEMORY = "NEW_MEMORY"
+
+
+def evaluate_update_semantics(
+    subject: str,
+    relation: str,
+    value: str,
+    active_memories: Optional[Iterable] = None,
+    is_single_value_fn: Optional[Callable[[str], bool]] = None,
+) -> Tuple[UpdateSemanticsDecision, Optional[any], str]:
+    """
+    Determine whether incoming information is a duplicate, a conflict requiring supersession,
+    or a brand-new memory.
+    
+    Returns:
+        (decision: UpdateSemanticsDecision, matched_memory: Optional[Memory], reason: str)
+    """
+    if not active_memories:
+        return UpdateSemanticsDecision.NEW_MEMORY, None, "no_active_memories"
+
+    # 1. Check for exact active duplicate
+    for mem in active_memories:
+        if (
+            getattr(mem, "active", False)
+            and getattr(mem, "subject", None) == subject
+            and getattr(mem, "relation", None) == relation
+            and getattr(mem, "value", None) == value
+        ):
+            return UpdateSemanticsDecision.DUPLICATE, mem, f"exact_duplicate_of:{getattr(mem, 'id', None)}"
+
+    # 2. Check for single-value conflict
+    if is_single_value_fn and is_single_value_fn(relation):
+        for mem in active_memories:
+            if (
+                getattr(mem, "active", False)
+                and getattr(mem, "subject", None) == subject
+                and getattr(mem, "relation", None) == relation
+                and getattr(mem, "value", None) != value
+            ):
+                return UpdateSemanticsDecision.CONFLICT_SUPERSEDE, mem, f"conflicts_with:{getattr(mem, 'id', None)}"
+
+    # 3. New memory (novel fact or multi-value addition)
+    return UpdateSemanticsDecision.NEW_MEMORY, None, "new_memory"
+

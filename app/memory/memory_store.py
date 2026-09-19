@@ -4,7 +4,9 @@ from app.database.database import SessionLocal
 from app.database.models import Memory
 from app.memory.lifecycle import (
     MemoryLifecycleState,
+    UpdateSemanticsDecision,
     determine_lifecycle_state,
+    evaluate_update_semantics,
     validate_restoration_safety,
 )
 
@@ -55,28 +57,28 @@ class MemoryStore:
         value,
         category,
         importance=5,
-        embedding=None
+        embedding=None,
+        update_duplicate_importance=True
     ):
-        # Check for exact duplicate
-        existing = self._find_active_memory(
+        active_memories = self.get_all_memories()
+        decision, matched, reason = evaluate_update_semantics(
             subject=subject,
             relation=relation,
-            value=value
+            value=value,
+            active_memories=active_memories,
+            is_single_value_fn=self.is_single_value_relation
         )
 
-        if existing:
-            return existing, "duplicate"
+        if decision == UpdateSemanticsDecision.DUPLICATE:
+            if update_duplicate_importance and importance is not None and matched.importance is not None:
+                if importance > matched.importance:
+                    matched.importance = importance
+                    self.session.commit()
+                    self.session.refresh(matched)
+            return matched, "duplicate"
 
-        # Check for conflicting active memory
-        conflict = self._find_conflicting_memory(
-            subject=subject,
-            relation=relation,
-            value=value
-        )
-
-        # Deactivate old conflicting memory
-        if conflict:
-            conflict.active = False
+        if decision == UpdateSemanticsDecision.CONFLICT_SUPERSEDE:
+            matched.active = False
 
         # Create new memory
         memory = Memory(
@@ -94,6 +96,115 @@ class MemoryStore:
         self.session.refresh(memory)
 
         return memory, "created"
+
+    def save_memory_with_semantics(
+        self,
+        subject,
+        relation,
+        value,
+        category,
+        importance=5,
+        embedding=None,
+        update_duplicate_importance=True
+    ):
+        """
+        Save memory and return explainable update semantics metadata.
+        Returns: (memory, status, metadata_dict)
+        """
+        active_memories = self.get_all_memories()
+        decision, matched, reason = evaluate_update_semantics(
+            subject=subject,
+            relation=relation,
+            value=value,
+            active_memories=active_memories,
+            is_single_value_fn=self.is_single_value_relation
+        )
+
+        superseded_memory_id = None
+        if decision == UpdateSemanticsDecision.DUPLICATE:
+            if update_duplicate_importance and importance is not None and matched.importance is not None:
+                if importance > matched.importance:
+                    matched.importance = importance
+                    self.session.commit()
+                    self.session.refresh(matched)
+            return matched, "duplicate", {
+                "decision": decision,
+                "reason": reason,
+                "matched_memory_id": matched.id,
+                "superseded_memory_id": None,
+            }
+
+        if decision == UpdateSemanticsDecision.CONFLICT_SUPERSEDE:
+            matched.active = False
+            superseded_memory_id = matched.id
+
+        memory = Memory(
+            subject=subject,
+            relation=relation,
+            value=value,
+            category=category,
+            importance=importance,
+            active=True,
+            embedding=embedding
+        )
+
+        self.session.add(memory)
+        self.session.commit()
+        self.session.refresh(memory)
+
+        return memory, "created", {
+            "decision": decision,
+            "reason": reason,
+            "matched_memory_id": matched.id if matched else None,
+            "superseded_memory_id": superseded_memory_id,
+        }
+
+    def update_memory(
+        self,
+        memory_id,
+        value=None,
+        importance=None,
+        category=None,
+        embedding=None
+    ):
+        """
+        Perform an explicit in-place update on an existing memory.
+        Validates single-value uniqueness when value is modified.
+        
+        Returns:
+            (memory, "updated") on success, or (None, error_reason) on failure.
+        """
+        memory = self.session.get(Memory, memory_id)
+        if memory is None:
+            return None, "memory_not_found"
+
+        if value is not None and value != memory.value:
+            if memory.active and self.is_single_value_relation(memory.relation):
+                statement = select(Memory).where(
+                    Memory.subject == memory.subject,
+                    Memory.relation == memory.relation,
+                    Memory.id != memory.id,
+                    Memory.active.is_(True)
+                )
+                other_active = self.session.execute(statement).scalars().first()
+                if other_active:
+                    return None, f"single_value_conflict_with_active_memory:{other_active.id}"
+
+            memory.value = value
+
+        if importance is not None:
+            memory.importance = importance
+
+        if category is not None:
+            memory.category = category
+
+        if embedding is not None:
+            memory.embedding = embedding
+
+        self.session.commit()
+        self.session.refresh(memory)
+        return memory, "updated"
+
 
     def _find_active_memory(
         self,
