@@ -3,9 +3,11 @@ from sqlalchemy import select
 from app.database.database import SessionLocal
 from app.database.models import Memory
 from app.memory.lifecycle import (
+    ArchivalReason,
     MemoryLifecycleState,
     UpdateSemanticsDecision,
     determine_lifecycle_state,
+    evaluate_archival_eligibility,
     evaluate_update_semantics,
     validate_restoration_safety,
 )
@@ -279,9 +281,79 @@ class MemoryStore:
 
         return True
 
-    def archive_memory(self, memory_id):
-        """Semantic alias for deactivating/archiving a memory."""
-        return self.deactivate_memory(memory_id)
+    def archive_memory(
+        self,
+        memory_id,
+        reason=ArchivalReason.EXPLICIT_USER_REQUEST,
+        force=False,
+        protected_importance=7,
+        protected_categories=None,
+    ):
+        """
+        Archive a memory respecting Recallix archival rules.
+        Explicit user action or force=True always succeeds.
+        Policy-based or automatic archival respects importance and category protections.
+        """
+        memory = self.session.get(Memory, memory_id)
+        if memory is None:
+            return False
+
+        can_archive, _ = evaluate_archival_eligibility(
+            memory=memory,
+            reason=reason,
+            protected_importance=protected_importance,
+            protected_categories=protected_categories,
+            force=force,
+        )
+        if not can_archive:
+            return False
+
+        memory.active = False
+        self.session.commit()
+        self.session.refresh(memory)
+        return True
+
+    def can_archive(
+        self,
+        memory_id,
+        reason=ArchivalReason.POLICY_ARCHIVED,
+        protected_importance=7,
+        protected_categories=None,
+    ):
+        """
+        Check if a memory is eligible to be archived under a specific reason or policy.
+        Returns: (can_archive: bool, reason: str)
+        """
+        memory = self.session.get(Memory, memory_id)
+        if memory is None:
+            return False, "memory_not_found"
+
+        return evaluate_archival_eligibility(
+            memory=memory,
+            reason=reason,
+            protected_importance=protected_importance,
+            protected_categories=protected_categories,
+        )
+
+    def get_archival_candidates(self, subject=None, max_importance=3, protected_categories=None):
+        """
+        Find active memories that are potential candidates for policy/manual archival
+        (low importance, non-protected).
+        """
+        active_memories = self.get_all_memories()
+        candidates = []
+        for mem in active_memories:
+            if subject is not None and mem.subject != subject:
+                continue
+            can_archive, _ = evaluate_archival_eligibility(
+                memory=mem,
+                reason=ArchivalReason.LOW_IMPORTANCE_DEPRECATED,
+                protected_categories=protected_categories,
+            )
+            if can_archive and (mem.importance is not None and mem.importance <= max_importance):
+                candidates.append(mem)
+        return candidates
+
 
     def get_lifecycle_state(self, memory_id):
         """

@@ -157,3 +157,60 @@ def evaluate_update_semantics(
     # 3. New memory (novel fact or multi-value addition)
     return UpdateSemanticsDecision.NEW_MEMORY, None, "new_memory"
 
+
+class ArchivalReason(str, Enum):
+    """
+    Reasons for archiving/deactivating a memory in Recallix.
+    """
+    EXPLICIT_USER_REQUEST = "EXPLICIT_USER_REQUEST"
+    CONFLICT_SUPERSEDED = "CONFLICT_SUPERSEDED"
+    LOW_IMPORTANCE_DEPRECATED = "LOW_IMPORTANCE_DEPRECATED"
+    POLICY_ARCHIVED = "POLICY_ARCHIVED"
+
+
+DEFAULT_PROTECTED_CATEGORIES = frozenset({"EDUCATION", "IDENTITY", "CORE_PROFILE"})
+
+
+def evaluate_archival_eligibility(
+    memory,
+    reason: ArchivalReason = ArchivalReason.EXPLICIT_USER_REQUEST,
+    protected_importance: int = 7,
+    protected_categories: Optional[Iterable[str]] = None,
+    force: bool = False,
+) -> Tuple[bool, str]:
+    """
+    Evaluate whether a memory can be archived according to Recallix rules.
+    
+    Rule: OLD != WRONG.
+    Age alone never justifies archiving a memory.
+    Memories with high importance or in protected categories cannot be
+    archived by policy/automation unless explicitly forced or requested by the user.
+    
+    Returns:
+        (can_archive: bool, explanation: str)
+    """
+    if not getattr(memory, "active", False):
+        return False, "already_inactive"
+
+    if force or reason in (ArchivalReason.EXPLICIT_USER_REQUEST, ArchivalReason.CONFLICT_SUPERSEDED):
+        return True, "allowed_by_explicit_action_or_supersession"
+
+    categories = set(protected_categories) if protected_categories is not None else DEFAULT_PROTECTED_CATEGORIES
+    mem_category = getattr(memory, "category", None)
+    if mem_category and mem_category.upper() in categories:
+        return False, f"protected_category:{mem_category}"
+
+    mem_importance = getattr(memory, "importance", 5)
+    if mem_importance is not None and mem_importance >= protected_importance:
+        return False, f"protected_high_importance:{mem_importance}"
+
+    if reason == ArchivalReason.LOW_IMPORTANCE_DEPRECATED:
+        if mem_importance is not None and mem_importance <= 3:
+            return True, "eligible_low_importance"
+        return False, f"importance_too_high_for_deprecation:{mem_importance}"
+
+    if reason == ArchivalReason.POLICY_ARCHIVED:
+        return True, "eligible_by_policy"
+
+    return False, "requires_explicit_user_action"
+
