@@ -1,9 +1,11 @@
-from app.llm.llm_engine import LLMEngine
+from app.llm.llm_engine import LLMEngine, UNSUPPORTED_RESPONSE
 from app.retrieval.retrieval_engine import RetrievalEngine
 
 
 class AssistantEngine:
     """Main Recallix memory-aware assistant pipeline."""
+
+    UNSUPPORTED_RESPONSE = UNSUPPORTED_RESPONSE
 
     def __init__(self, retrieval_engine=None, llm_engine=None):
         self.retrieval_engine = retrieval_engine or RetrievalEngine()
@@ -67,6 +69,11 @@ class AssistantEngine:
             relation = getattr(memory, "relation", None)
             if category == intent or relation in intent_relations.get(intent, set()):
                 relevant_memories.append(item)
+
+        relevant_memories.sort(
+            key=lambda x: float(x.get("score", 0.0)),
+            reverse=True,
+        )
 
         return relevant_memories
 
@@ -134,7 +141,7 @@ class AssistantEngine:
 
         if not self._has_supported_memories(relevant_memories):
             result = {
-                "response": "I don't have enough information in my memory to answer that.",
+                "response": self.UNSUPPORTED_RESPONSE,
                 "memories": [],
                 "retrieved_memories": retrieved_memories,
                 "intent": intent,
@@ -169,3 +176,4 @@ class AssistantEngine:
     def close(self):
         self.retrieval_engine.close()
         self.llm_engine.close()
+

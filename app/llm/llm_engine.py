@@ -3,6 +3,24 @@ import os
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+UNSUPPORTED_RESPONSE = "I don't have enough information in my memory to answer that."
+
+GROUNDED_SYSTEM_PROMPT = (
+    "You are Recallix, an AI assistant with memory. "
+    "Answer the user's question using only the explicitly "
+    "provided memory context. "
+    "Do not invent facts. "
+    "Do not infer facts that are not explicitly supported. "
+    "Do not treat general world knowledge as user memory. "
+    "If the provided memories do not contain enough information "
+    "to answer the question about the user, clearly say that "
+    "you do not have enough information. "
+    "Never claim an unsupported user fact. "
+    "Do not mention memory categories, relevance scores, "
+    "retrieval details, embeddings, or system metadata. "
+    "Answer naturally, clearly, and directly."
+)
+
 
 class LLMEngine:
     """
@@ -12,10 +30,15 @@ class LLMEngine:
     Default model: qwen2.5:3b
     """
 
+    UNSUPPORTED_RESPONSE = UNSUPPORTED_RESPONSE
+    GROUNDED_SYSTEM_PROMPT = GROUNDED_SYSTEM_PROMPT
+
     def __init__(
         self,
         model=None,
         base_url=None,
+        timeout=None,
+        connect_timeout=None,
     ):
         self.model = model or os.getenv(
             "RECALLIX_LLM_MODEL",
@@ -30,6 +53,20 @@ class LLMEngine:
             )
         ).rstrip("/")
 
+        try:
+            self.timeout = float(
+                timeout or os.getenv("RECALLIX_LLM_TIMEOUT", "120")
+            )
+        except (ValueError, TypeError):
+            self.timeout = 120.0
+
+        try:
+            self.connect_timeout = float(
+                connect_timeout or os.getenv("RECALLIX_LLM_CONNECT_TIMEOUT", "3")
+            )
+        except (ValueError, TypeError):
+            self.connect_timeout = 3.0
+
     def is_available(self):
         """
         Check whether the Ollama server is reachable.
@@ -41,7 +78,7 @@ class LLMEngine:
                 method="GET",
             )
 
-            with urlopen(request, timeout=3) as response:
+            with urlopen(request, timeout=self.connect_timeout) as response:
                 return response.status == 200
 
         except (URLError, HTTPError, OSError):
@@ -100,7 +137,7 @@ class LLMEngine:
         )
 
         try:
-            with urlopen(request, timeout=120) as response:
+            with urlopen(request, timeout=self.timeout) as response:
                 result = json.loads(
                     response.read().decode("utf-8")
                 )
@@ -148,9 +185,15 @@ class LLMEngine:
         memories,
         temperature=0.2,
         max_tokens=500,
+        system_prompt=None,
+        fallback_on_empty=True,
     ):
         """
         Generate a response using retrieved Recallix memories.
+
+        When fallback_on_empty is True, if no supported active memories
+        are provided, immediately returns UNSUPPORTED_RESPONSE without
+        incurring LLM latency or hallucination risk.
         """
 
         if not user_message or not user_message.strip():
@@ -158,26 +201,13 @@ class LLMEngine:
                 "User message cannot be empty."
             )
 
-        memory_context = (
-            self._build_memory_context(
-                memories
-            )
-        )
+        if fallback_on_empty and not self._has_supported_memories(memories):
+            return self.UNSUPPORTED_RESPONSE
 
-        system_prompt = (
-            "You are Recallix, an AI assistant with memory. "
-            "Answer the user's question using only the explicitly "
-            "provided memory context. "
-            "Do not invent facts. "
-            "Do not infer facts that are not explicitly supported. "
-            "Do not treat general world knowledge as user memory. "
-            "If the provided memories do not contain enough information "
-            "to answer the question about the user, clearly say that "
-            "you do not have enough information. "
-            "Never claim an unsupported user fact. "
-            "Do not mention memory categories, relevance scores, "
-            "retrieval details, embeddings, or system metadata. "
-            "Answer naturally, clearly, and directly."
+        memory_context = self.build_memory_context(memories)
+
+        effective_system_prompt = (
+            system_prompt or self.GROUNDED_SYSTEM_PROMPT
         )
 
         prompt = (
@@ -189,17 +219,17 @@ class LLMEngine:
 
         return self.generate(
             prompt=prompt,
-            system_prompt=system_prompt,
+            system_prompt=effective_system_prompt,
             temperature=temperature,
             max_tokens=max_tokens,
         )
 
-    def _build_memory_context(self, memories):
+    def build_memory_context(self, memories, max_memories=None):
         """
         Convert memory objects into clean LLM-ready context.
 
-        Internal metadata such as scores and categories are
-        intentionally excluded.
+        Internal metadata such as scores, categories, timestamps,
+        embeddings, and IDs are intentionally excluded.
         """
 
         if not memories:
@@ -209,10 +239,10 @@ class LLMEngine:
 
         for item in memories:
 
-            if not isinstance(item, dict):
-                continue
-
-            memory = item.get("memory")
+            if isinstance(item, dict):
+                memory = item.get("memory")
+            else:
+                memory = item
 
             if memory is None:
                 continue
@@ -272,10 +302,76 @@ class LLMEngine:
                 f"{subject} {relation_text} {value}."
             )
 
+            if max_memories is not None and len(lines) >= max_memories:
+                break
+
         if not lines:
             return "No relevant memories found."
 
         return "\n".join(lines)
+
+    def _build_memory_context(self, memories):
+        """Backwards compatibility alias for build_memory_context."""
+        return self.build_memory_context(memories)
+
+    def prioritize_memories(
+        self,
+        memories,
+        max_memories=5,
+        min_relevance=0.25,
+    ):
+        """
+        Prioritize and rank memories for context injection:
+        1. Filter for active memories only.
+        2. Filter out memories below min_relevance.
+        3. Sort descending by relevance score.
+        4. Cap at max_memories.
+        """
+        if not memories:
+            return []
+
+        filtered = []
+        for item in memories:
+            if not isinstance(item, dict):
+                continue
+            memory = item.get("memory")
+            if memory is None or getattr(memory, "active", True) is not True:
+                continue
+            try:
+                score = float(item.get("score", 0.0))
+            except (TypeError, ValueError):
+                score = 0.0
+
+            if score < min_relevance:
+                continue
+
+            filtered.append(item)
+
+        filtered.sort(
+            key=lambda x: float(x.get("score", 0.0)),
+            reverse=True,
+        )
+
+        if max_memories is not None and max_memories > 0:
+            return filtered[:max_memories]
+
+        return filtered
+
+    def _has_supported_memories(self, memories):
+        """Check whether there is at least one active memory with non-empty content."""
+        if not memories:
+            return False
+        for item in memories:
+            if isinstance(item, dict):
+                memory = item.get("memory")
+            else:
+                memory = item
+            if memory is None or getattr(memory, "active", True) is not True:
+                continue
+            value = getattr(memory, "value", None)
+            if value is not None and str(value).strip():
+                return True
+        return False
 
     def close(self):
         """
