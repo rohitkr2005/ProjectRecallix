@@ -298,9 +298,9 @@ class LLMEngine:
                 ),
             )
 
-            lines.append(
-                f"{subject} {relation_text} {value}."
-            )
+            formatted_line = f"{subject} {relation_text} {value}."
+            if formatted_line not in lines:
+                lines.append(formatted_line)
 
             if max_memories is not None and len(lines) >= max_memories:
                 break
@@ -356,6 +356,96 @@ class LLMEngine:
             return filtered[:max_memories]
 
         return filtered
+
+    def verify_answer_grounding(self, response, memories):
+        """
+        Verify whether an answer is grounded in the provided memories.
+
+        Returns:
+            dict: {
+                "grounded": bool,
+                "supported_values": list[str],
+                "grounding_score": float,
+                "details": str,
+            }
+        """
+        if not response or not response.strip():
+            return {
+                "grounded": False,
+                "supported_values": [],
+                "grounding_score": 0.0,
+                "details": "Empty response cannot be grounded.",
+            }
+
+        response_clean = response.strip()
+
+        # If the response explicitly states lack of information, it is grounded
+        # in the lack of memory evidence.
+        if (
+            response_clean == self.UNSUPPORTED_RESPONSE
+            or "don't have enough information" in response_clean.lower()
+            or "do not have enough information" in response_clean.lower()
+        ):
+            return {
+                "grounded": True,
+                "supported_values": [],
+                "grounding_score": 1.0,
+                "details": "Response correctly declined to answer due to missing/insufficient memory.",
+            }
+
+        # Extract active values from memories
+        memory_values = []
+        for item in memories or []:
+            if isinstance(item, dict):
+                mem = item.get("memory")
+            else:
+                mem = item
+            if mem is None or getattr(mem, "active", True) is not True:
+                continue
+            val = getattr(mem, "value", None)
+            if val is not None and str(val).strip():
+                memory_values.append(str(val).strip())
+
+        if not memory_values:
+            return {
+                "grounded": False,
+                "supported_values": [],
+                "grounding_score": 0.0,
+                "details": "Substantive answer provided without supporting memories (hallucination risk).",
+            }
+
+        matched_values = []
+        response_lower = response_clean.lower()
+
+        for val in memory_values:
+            val_lower = val.lower()
+            if val_lower in response_lower:
+                matched_values.append(val)
+            else:
+                tokens = [t for t in val_lower.split() if len(t) > 3]
+                if tokens and any(t in response_lower for t in tokens):
+                    matched_values.append(val)
+
+        unique_matched = list(dict.fromkeys(matched_values))
+        grounding_score = round(
+            len(unique_matched) / max(len(memory_values), 1),
+            4,
+        )
+
+        is_grounded = len(unique_matched) > 0
+
+        details = (
+            f"Grounded: {len(unique_matched)}/{len(memory_values)} memory values supported."
+            if is_grounded
+            else "Ungrounded: Response does not reference any provided memory values."
+        )
+
+        return {
+            "grounded": is_grounded,
+            "supported_values": unique_matched,
+            "grounding_score": grounding_score,
+            "details": details,
+        }
 
     def _has_supported_memories(self, memories):
         """Check whether there is at least one active memory with non-empty content."""

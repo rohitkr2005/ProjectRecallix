@@ -476,3 +476,208 @@ def test_assistant_engine_handles_low_relevance_as_unsupported():
     assert result["supported"] is False
     assert result["memories"] == []
     mock_llm.generate_with_memories.assert_not_called()
+
+
+# =====================================================================
+# 8.6 — Answer Grounding
+# =====================================================================
+
+
+def test_verify_answer_grounding_matches_memory_values():
+    """Verify verify_answer_grounding confirms when response references memory values."""
+    engine = LLMEngine()
+    memories = [
+        make_memory(subject="User", relation="works_on", value="Project Recallix"),
+        make_memory(subject="User", relation="likes", value="Python"),
+    ]
+
+    response = "You are working on Project Recallix and you like Python."
+    result = engine.verify_answer_grounding(response, memories)
+
+    assert result["grounded"] is True
+    assert "Project Recallix" in result["supported_values"]
+    assert "Python" in result["supported_values"]
+    assert result["grounding_score"] == 1.0
+
+
+def test_verify_answer_grounding_detects_hallucination():
+    """Verify verify_answer_grounding flags ungrounded claims not in memories."""
+    engine = LLMEngine()
+    memories = [
+        make_memory(subject="User", relation="likes", value="Python"),
+    ]
+
+    response = "You love Java and Spring Boot."
+    result = engine.verify_answer_grounding(response, memories)
+
+    assert result["grounded"] is False
+    assert result["supported_values"] == []
+    assert result["grounding_score"] == 0.0
+    assert "Ungrounded" in result["details"]
+
+
+def test_verify_answer_grounding_unsupported_response():
+    """Verify standard unsupported response is recognized as grounded."""
+    engine = LLMEngine()
+    result = engine.verify_answer_grounding(UNSUPPORTED_RESPONSE, [])
+    assert result["grounded"] is True
+    assert result["grounding_score"] == 1.0
+
+
+def test_assistant_attaches_grounding_metadata():
+    """Verify AssistantEngine attaches grounding metadata to responses."""
+    mem = make_memory(subject="User", relation="works_on", value="Project Recallix")
+    mock_retrieval = MagicMock()
+    mock_retrieval.search.return_value = [mem]
+    mock_retrieval._detect_query_intent.return_value = "PROJECT"
+
+    mock_llm = MagicMock()
+    mock_llm.generate_with_memories.return_value = "You are working on Project Recallix."
+    mock_llm.verify_answer_grounding.return_value = {
+        "grounded": True,
+        "supported_values": ["Project Recallix"],
+        "grounding_score": 1.0,
+        "details": "Grounded: 1/1 memory values supported.",
+    }
+
+    assistant = AssistantEngine(
+        retrieval_engine=mock_retrieval,
+        llm_engine=mock_llm,
+    )
+
+    result = assistant.respond("What project am I working on?")
+    assert result["supported"] is True
+    assert result["grounded"] is True
+    assert result["grounding_details"]["grounded"] is True
+    assert result["llm_status"] == "success"
+
+
+# =====================================================================
+# 8.7 — Multi-Memory Reasoning
+# =====================================================================
+
+
+def test_multi_memory_context_synthesis():
+    """Verify context construction synthesizes multiple diverse memories cleanly."""
+    engine = LLMEngine()
+    memories = [
+        make_memory(subject="User", relation="works_on", value="Project Recallix"),
+        make_memory(subject="User", relation="works_on", value="Antigravity"),
+        make_memory(subject="User", relation="knows", value="Python"),
+        make_memory(subject="User", relation="wants_to_learn", value="Rust"),
+    ]
+
+    context = engine.build_memory_context(memories)
+    lines = context.split("\n")
+    assert len(lines) == 4
+    assert "User works on Project Recallix." in lines
+    assert "User works on Antigravity." in lines
+    assert "User knows Python." in lines
+    assert "User wants to learn Rust." in lines
+
+
+def test_multi_memory_context_deduplication():
+    """Verify duplicate formatted memories are deduplicated in context."""
+    engine = LLMEngine()
+    memories = [
+        make_memory(subject="User", relation="knows", value="Python"),
+        make_memory(subject="User", relation="knows", value="Python"),
+    ]
+
+    context = engine.build_memory_context(memories)
+    assert context == "User knows Python."
+
+
+def test_multi_memory_conflicting_values_prefers_active():
+    """Verify inactive conflicting memories are excluded from multi-memory context."""
+    engine = LLMEngine()
+    memories = [
+        make_memory(subject="User", relation="lives_in", value="Delhi", active=False),
+        make_memory(subject="User", relation="lives_in", value="Mumbai", active=True),
+    ]
+
+    context = engine.build_memory_context(memories)
+    assert context == "User lives in Mumbai."
+
+
+# =====================================================================
+# 8.8 — LLM Failure Handling
+# =====================================================================
+
+
+def test_assistant_handles_llm_connection_failure_with_fallback():
+    """Verify AssistantEngine falls back to extractive memory summary when LLM fails."""
+    mem = make_memory(subject="User", relation="works_on", value="Project Recallix")
+    mock_retrieval = MagicMock()
+    mock_retrieval.search.return_value = [mem]
+    mock_retrieval._detect_query_intent.return_value = "PROJECT"
+
+    mock_llm = MagicMock()
+    mock_llm.generate_with_memories.side_effect = RuntimeError("Unable to connect to Ollama.")
+    mock_llm.build_memory_context.return_value = "User works on Project Recallix."
+    mock_llm.verify_answer_grounding.return_value = {
+        "grounded": True,
+        "supported_values": ["Project Recallix"],
+        "grounding_score": 1.0,
+        "details": "Grounded fallback.",
+    }
+
+    assistant = AssistantEngine(
+        retrieval_engine=mock_retrieval,
+        llm_engine=mock_llm,
+    )
+
+    result = assistant.respond("What project am I working on?")
+    assert result["supported"] is True
+    assert "unable to reach the local LLM" in result["response"]
+    assert "User works on Project Recallix." in result["response"]
+    assert "fallback: Unable to connect to Ollama." in result["llm_status"]
+    assert result["grounded"] is True
+
+
+def test_assistant_handles_llm_timeout_with_fallback():
+    """Verify AssistantEngine handles timeout with extractive fallback."""
+    mem = make_memory(subject="User", relation="likes", value="Python")
+    mock_retrieval = MagicMock()
+    mock_retrieval.search.return_value = [mem]
+    mock_retrieval._detect_query_intent.return_value = "PREFERENCE"
+
+    mock_llm = MagicMock()
+    mock_llm.generate_with_memories.side_effect = TimeoutError("Request timed out")
+    mock_llm.build_memory_context.return_value = "User likes Python."
+    mock_llm.verify_answer_grounding.return_value = {
+        "grounded": True,
+        "supported_values": ["Python"],
+        "grounding_score": 1.0,
+        "details": "Grounded fallback.",
+    }
+
+    assistant = AssistantEngine(
+        retrieval_engine=mock_retrieval,
+        llm_engine=mock_llm,
+    )
+
+    result = assistant.respond("What do I like?")
+    assert result["supported"] is True
+    assert "User likes Python." in result["response"]
+    assert "fallback: Request timed out" in result["llm_status"]
+
+
+def test_assistant_disables_fallback_when_configured():
+    """Verify AssistantEngine raises error if fallback_to_extractive=False."""
+    mem = make_memory(subject="User", relation="likes", value="Python")
+    mock_retrieval = MagicMock()
+    mock_retrieval.search.return_value = [mem]
+    mock_retrieval._detect_query_intent.return_value = "PREFERENCE"
+
+    mock_llm = MagicMock()
+    mock_llm.generate_with_memories.side_effect = RuntimeError("Ollama crashed")
+
+    assistant = AssistantEngine(
+        retrieval_engine=mock_retrieval,
+        llm_engine=mock_llm,
+    )
+
+    with pytest.raises(RuntimeError, match="Ollama crashed"):
+        assistant.respond("What do I like?", fallback_to_extractive=False)
+

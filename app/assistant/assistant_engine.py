@@ -18,9 +18,12 @@ class AssistantEngine:
         """Use richer query analysis when available, with a safe legacy fallback."""
         analyzer = getattr(self.retrieval_engine, "analyze_query_intent", None)
         if callable(analyzer):
-            return analyzer(user_message)
+            res = analyzer(user_message)
+            if isinstance(res, dict) and "intent" in res:
+                return res
 
-        intent = self.retrieval_engine._detect_query_intent(user_message)
+        detector = getattr(self.retrieval_engine, "_detect_query_intent", None)
+        intent = detector(user_message) if callable(detector) else None
         return {
             "intent": intent,
             "confidence": 1.0 if intent else 0.0,
@@ -113,6 +116,7 @@ class AssistantEngine:
         max_tokens=500,
         memory_relevance=0.25,
         include_explanations=False,
+        fallback_to_extractive=True,
     ):
         if not user_message or not user_message.strip():
             raise ValueError("User message cannot be empty.")
@@ -140,6 +144,12 @@ class AssistantEngine:
         explanations = self._build_retrieval_explanations(retrieved_memories)
 
         if not self._has_supported_memories(relevant_memories):
+            grounding = {
+                "grounded": True,
+                "supported_values": [],
+                "grounding_score": 1.0,
+                "details": "Response correctly declined unsupported question.",
+            }
             result = {
                 "response": self.UNSUPPORTED_RESPONSE,
                 "memories": [],
@@ -148,17 +158,37 @@ class AssistantEngine:
                 "intent_confidence": intent_analysis["confidence"],
                 "intent_strict": strict_intent,
                 "supported": False,
+                "grounded": True,
+                "grounding_details": grounding,
+                "llm_status": "skipped_unsupported",
             }
             if include_explanations:
                 result["retrieval_explanations"] = explanations
             return result
 
-        response = self.llm_engine.generate_with_memories(
-            user_message=user_message,
-            memories=relevant_memories,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+        llm_status = "success"
+        try:
+            response = self.llm_engine.generate_with_memories(
+                user_message=user_message,
+                memories=relevant_memories,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        except Exception as error:
+            if not fallback_to_extractive:
+                raise
+            context_text = self.llm_engine.build_memory_context(relevant_memories)
+            response = (
+                "I'm currently unable to reach the local LLM runtime. "
+                f"Based directly on your stored memory:\n{context_text}"
+            )
+            llm_status = f"fallback: {str(error)}"
+
+        grounding = getattr(
+            self.llm_engine,
+            "verify_answer_grounding",
+            lambda r, m: {"grounded": True, "supported_values": [], "grounding_score": 1.0, "details": "Unverified"},
+        )(response, relevant_memories)
 
         result = {
             "response": response,
@@ -168,6 +198,9 @@ class AssistantEngine:
             "intent_confidence": intent_analysis["confidence"],
             "intent_strict": strict_intent,
             "supported": True,
+            "grounded": grounding.get("grounded", True),
+            "grounding_details": grounding,
+            "llm_status": llm_status,
         }
         if include_explanations:
             result["retrieval_explanations"] = explanations
