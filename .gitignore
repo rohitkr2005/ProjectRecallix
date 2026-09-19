@@ -30,3 +30,6 @@ Thumbs.db
 build/
 dist/
 *.egg-info/
+
+# Local runner wrapper
+powershell.bat

@@ -2,6 +2,11 @@ from sqlalchemy import select
 
 from app.database.database import SessionLocal
 from app.database.models import Memory
+from app.memory.lifecycle import (
+    MemoryLifecycleState,
+    determine_lifecycle_state,
+    validate_restoration_safety,
+)
 
 
 SINGLE_VALUE_RELATIONS = {
@@ -163,11 +168,45 @@ class MemoryStore:
 
         return True
 
-    def restore_memory(self, memory_id):
+    def archive_memory(self, memory_id):
+        """Semantic alias for deactivating/archiving a memory."""
+        return self.deactivate_memory(memory_id)
+
+    def get_lifecycle_state(self, memory_id):
+        """
+        Compute the formal lifecycle state (ACTIVE, ARCHIVED, SUPERSEDED)
+        for the given memory.
+        """
+        memory = self.session.get(Memory, memory_id)
+        if memory is None:
+            return None
+
+        active_memories = self.get_all_memories()
+        return determine_lifecycle_state(
+            memory=memory,
+            active_memories=active_memories,
+            is_single_value_fn=self.is_single_value_relation,
+        )
+
+    def restore_memory(self, memory_id, allow_conflict=False):
+        """
+        Safely restore an inactive memory. If allow_conflict is False,
+        prevents restoring a single-value memory when an active conflict exists.
+        """
         memory = self.session.get(Memory, memory_id)
 
         if memory is None:
             return False
+
+        if not allow_conflict:
+            active_memories = self.get_all_memories()
+            can_restore, _ = validate_restoration_safety(
+                memory=memory,
+                active_memories=active_memories,
+                is_single_value_fn=self.is_single_value_relation,
+            )
+            if not can_restore:
+                return False
 
         memory.active = True
 
@@ -176,5 +215,40 @@ class MemoryStore:
 
         return True
 
+    def get_superseded_memories(self):
+        """Return all memories that have been superseded by newer active values."""
+        archived = self.get_archived_memories()
+        active = self.get_all_memories()
+        return [
+            m for m in archived
+            if determine_lifecycle_state(m, active, self.is_single_value_relation) == MemoryLifecycleState.SUPERSEDED
+        ]
+
+    def get_lifecycle_history(self, subject=None, relation=None):
+        """
+        Retrieve memory history with lifecycle states for a subject and optional relation.
+        """
+        statement = select(Memory).order_by(Memory.created_at.asc(), Memory.id.asc())
+        if subject is not None:
+            statement = statement.where(Memory.subject == subject)
+        if relation is not None:
+            statement = statement.where(Memory.relation == relation)
+
+        memories = self.session.execute(statement).scalars().all()
+        active_memories = [m for m in memories if m.active]
+
+        history = []
+        for memory in memories:
+            state = determine_lifecycle_state(
+                memory=memory,
+                active_memories=active_memories,
+                is_single_value_fn=self.is_single_value_relation,
+            )
+            history.append({
+                "memory": memory,
+                "lifecycle_state": state,
+            })
+        return history
+
     def close(self):
-        self.session.close()
+        self.session.close()
