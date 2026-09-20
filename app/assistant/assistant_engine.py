@@ -1,18 +1,134 @@
+from enum import Enum
+import re
+
 from app.llm.llm_engine import LLMEngine, UNSUPPORTED_RESPONSE
+from app.memory.memory_extractor import MemoryExtractor
+from app.memory.memory_store import MemoryStore
 from app.retrieval.retrieval_engine import RetrievalEngine
+
+
+class InputType(str, Enum):
+    STATEMENT = "STATEMENT"
+    QUESTION = "QUESTION"
+    BOTH = "BOTH"
+    NEITHER = "NEITHER"
 
 
 class AssistantEngine:
     """Main Recallix memory-aware assistant pipeline."""
 
     UNSUPPORTED_RESPONSE = UNSUPPORTED_RESPONSE
+    InputType = InputType
 
-    def __init__(self, retrieval_engine=None, llm_engine=None):
-        self.retrieval_engine = retrieval_engine or RetrievalEngine()
+    QUESTION_PATTERNS = [
+        r"\?",
+        r"^\s*(?:what|where|who|when|why|how|which)\b",
+        r"^\s*(?:can you tell me|tell me|could you tell me)\b",
+        r"^\s*(?:do i|am i|have i|did i|will i|was i)\b",
+        r"^\s*(?:is there|are there|do you remember|do you know)\b",
+        r"\b(?:what is|what are|where do|where am|who is|which project|which skill)\b",
+    ]
+
+    def __init__(
+        self,
+        retrieval_engine=None,
+        llm_engine=None,
+        memory_store=None,
+        memory_extractor=None,
+    ):
+        self.retrieval_engine = retrieval_engine or RetrievalEngine(memory_store=memory_store)
         self.llm_engine = llm_engine or LLMEngine()
+        self.memory_store = (
+            memory_store
+            or getattr(self.retrieval_engine, "memory_store", None)
+            or MemoryStore()
+        )
+        self.memory_extractor = memory_extractor or MemoryExtractor()
+        self.embedding_engine = getattr(self.retrieval_engine, "embedding_engine", None)
 
     def is_available(self):
         return self.llm_engine.is_available()
+
+    def classify_input(self, user_message: str) -> InputType:
+        """
+        Classify input message into:
+        - STATEMENT: new information/memory asserted
+        - QUESTION: inquiry/question asked
+        - BOTH: both new information and question present
+        - NEITHER: casual chit-chat or greeting
+        """
+        if not user_message or not user_message.strip():
+            return InputType.NEITHER
+
+        text = user_message.strip()
+        has_question = False
+        for pattern in self.QUESTION_PATTERNS:
+            if re.search(pattern, text, re.IGNORECASE):
+                has_question = True
+                break
+
+        extracted = []
+        if callable(getattr(self.memory_extractor, "extract", None)):
+            try:
+                extracted = self.memory_extractor.extract(text)
+            except Exception:
+                extracted = []
+
+        has_memories = bool(extracted)
+
+        if has_memories and has_question:
+            return InputType.BOTH
+        elif has_memories and not has_question:
+            return InputType.STATEMENT
+        elif not has_memories and has_question:
+            return InputType.QUESTION
+        else:
+            return InputType.NEITHER
+
+    def save_extracted_memories(self, extracted_memories):
+        """Save extracted memories into MemoryStore using lifecycle semantics."""
+        saved = []
+        if not extracted_memories:
+            return saved
+
+        for mem in extracted_memories:
+            subject = getattr(mem, "subject", "User")
+            relation = getattr(mem, "relation", "")
+            value = getattr(mem, "value", "")
+            category = getattr(mem, "category", "GENERAL")
+            importance = getattr(mem, "importance", 5)
+
+            embedding = None
+            if self.embedding_engine and hasattr(self.embedding_engine, "generate_memory_embedding"):
+                try:
+                    embedding = self.embedding_engine.generate_memory_embedding(
+                        subject=subject,
+                        relation=relation,
+                        value=value,
+                        category=category,
+                    )
+                except Exception:
+                    embedding = None
+
+            memory, status, metadata = self.memory_store.save_memory_with_semantics(
+                subject=subject,
+                relation=relation,
+                value=value,
+                category=category,
+                importance=importance,
+                embedding=embedding,
+            )
+            saved.append({
+                "memory": memory,
+                "status": status,
+                "metadata": metadata,
+                "subject": subject,
+                "relation": relation,
+                "value": value,
+                "category": category,
+                "importance": importance,
+            })
+        return saved
 
     def _analyze_intent(self, user_message):
         """Use richer query analysis when available, with a safe legacy fallback."""
@@ -106,6 +222,35 @@ class AssistantEngine:
             explanations.append(dict(explanation))
         return explanations
 
+    def _build_user_facing_explanations(self, memories):
+        """
+        Build human-readable explanations answering 'Why was this memory used?'.
+        Does not leak database IDs or raw embedding vectors.
+        """
+        user_explanations = []
+        for item in memories or []:
+            if not isinstance(item, dict):
+                continue
+            memory = item.get("memory")
+            if memory is None:
+                continue
+            subject = getattr(memory, "subject", "User")
+            relation = getattr(memory, "relation", "").replace("_", " ")
+            value = getattr(memory, "value", "")
+            explanation = item.get("explanation", {})
+
+            reasons = explanation.get("reasons", [])
+            if reasons:
+                reason_str = ", ".join(reasons)
+            else:
+                score = item.get("score", 0.0)
+                reason_str = f"relevance score of {score:.2f}"
+
+            user_explanations.append(
+                f"Memory '{subject} {relation} {value}' was used because: {reason_str}."
+            )
+        return user_explanations
+
     def respond(
         self,
         user_message,
@@ -122,7 +267,93 @@ class AssistantEngine:
             raise ValueError("User message cannot be empty.")
 
         user_message = user_message.strip()
+        input_type = self.classify_input(user_message)
+        saved_records = []
 
+        # 9.2 / 9.3: Handle statement extraction for STATEMENT or BOTH
+        if input_type in (InputType.STATEMENT, InputType.BOTH):
+            try:
+                extracted = self.memory_extractor.extract(user_message)
+                if extracted:
+                    saved_records = self.save_extracted_memories(extracted)
+            except Exception:
+                saved_records = []
+
+        # 1. Pure STATEMENT handling
+        if input_type == InputType.STATEMENT:
+            if saved_records:
+                if len(saved_records) == 1:
+                    rec = saved_records[0]
+                    rel = rec["relation"].replace("_", " ")
+                    response_text = f"Got it. I've remembered that you {rel} {rec['value']}."
+                else:
+                    response_text = f"Got it. I've remembered these {len(saved_records)} facts."
+            else:
+                response_text = "Got it. Thanks for sharing!"
+
+            result = {
+                "response": response_text,
+                "input_type": input_type,
+                "extracted_memories": saved_records,
+                "memories": [],
+                "retrieved_memories": [],
+                "intent": None,
+                "intent_confidence": 0.0,
+                "intent_strict": False,
+                "supported": True,
+                "grounded": True,
+                "grounding_details": {
+                    "grounded": True,
+                    "supported_values": [r["value"] for r in saved_records],
+                    "grounding_score": 1.0,
+                    "details": "Stored new memory statements.",
+                },
+                "llm_status": "skipped_statement",
+            }
+            if include_explanations:
+                result["retrieval_explanations"] = []
+                result["explanations"] = []
+                result["why_used"] = []
+            return result
+
+        # 2. Pure NEITHER (chit-chat / greeting) handling
+        if input_type == InputType.NEITHER:
+            msg_lower = user_message.lower()
+            if any(w in msg_lower for w in ["hi", "hello", "hey"]):
+                reply = "Hello! How can I help you today?"
+            elif any(w in msg_lower for w in ["thank", "thanks"]):
+                reply = "You're welcome!"
+            elif any(w in msg_lower for w in ["bye", "goodbye"]):
+                reply = "Goodbye! Let me know whenever you need anything."
+            else:
+                reply = "I'm here to answer your questions and manage your memories."
+
+            result = {
+                "response": reply,
+                "input_type": input_type,
+                "extracted_memories": [],
+                "memories": [],
+                "retrieved_memories": [],
+                "intent": None,
+                "intent_confidence": 0.0,
+                "intent_strict": False,
+                "supported": True,
+                "grounded": True,
+                "grounding_details": {
+                    "grounded": True,
+                    "supported_values": [],
+                    "grounding_score": 1.0,
+                    "details": "Conversational reply.",
+                },
+                "llm_status": "skipped_chit_chat",
+            }
+            if include_explanations:
+                result["retrieval_explanations"] = []
+                result["explanations"] = []
+                result["why_used"] = []
+            return result
+
+        # 3. QUESTION or BOTH handling
         retrieved_memories = self.retrieval_engine.search(
             query=user_message,
             top_k=top_k,
@@ -142,6 +373,7 @@ class AssistantEngine:
         )
 
         explanations = self._build_retrieval_explanations(retrieved_memories)
+        user_explanations = self._build_user_facing_explanations(relevant_memories)
 
         if not self._has_supported_memories(relevant_memories):
             grounding = {
@@ -152,6 +384,8 @@ class AssistantEngine:
             }
             result = {
                 "response": self.UNSUPPORTED_RESPONSE,
+                "input_type": input_type,
+                "extracted_memories": saved_records,
                 "memories": [],
                 "retrieved_memories": retrieved_memories,
                 "intent": intent,
@@ -164,6 +398,8 @@ class AssistantEngine:
             }
             if include_explanations:
                 result["retrieval_explanations"] = explanations
+                result["explanations"] = user_explanations
+                result["why_used"] = user_explanations
             return result
 
         llm_status = "success"
@@ -192,6 +428,8 @@ class AssistantEngine:
 
         result = {
             "response": response,
+            "input_type": input_type,
+            "extracted_memories": saved_records,
             "memories": relevant_memories,
             "retrieved_memories": retrieved_memories,
             "intent": intent,
@@ -204,9 +442,19 @@ class AssistantEngine:
         }
         if include_explanations:
             result["retrieval_explanations"] = explanations
+            result["explanations"] = user_explanations
+            result["why_used"] = user_explanations
         return result
 
+    # 9.1: Unified alias
+    process = respond
+
     def close(self):
-        self.retrieval_engine.close()
-        self.llm_engine.close()
+        if hasattr(self.retrieval_engine, "close") and callable(self.retrieval_engine.close):
+            self.retrieval_engine.close()
+        if hasattr(self.llm_engine, "close") and callable(self.llm_engine.close):
+            self.llm_engine.close()
+        if hasattr(self.memory_store, "close") and callable(self.memory_store.close):
+            self.memory_store.close()
+
 

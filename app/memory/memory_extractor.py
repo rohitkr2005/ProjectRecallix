@@ -77,6 +77,10 @@ class MemoryExtractor:
         if not sentence:
             return memories
 
+        # Questions should not be extracted as factual memories
+        if sentence.endswith("?") or re.search(r"^(?:what|where|who|when|why|how|which|do\s+i|am\s+i|can\s+i|is\s+there|are\s+there)\b", sentence, re.IGNORECASE):
+            return memories
+
         # Preference / likes
         memories.extend(
             self._extract_preferences(sentence)
@@ -163,6 +167,7 @@ class MemoryExtractor:
             r"\bI\s+live\s+in\s+(.+)",
             r"\bI\s+am\s+from\s+(.+)",
             r"\bI'm\s+from\s+(.+)",
+            r"\bI\s+moved\s+to\s+(.+)",
         ]
 
         for pattern in patterns:

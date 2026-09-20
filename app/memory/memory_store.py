@@ -29,8 +29,8 @@ SINGLE_VALUE_RELATIONS = {
 
 class MemoryStore:
 
-    def __init__(self):
-        self.session = SessionLocal()
+    def __init__(self, session=None):
+        self.session = session or SessionLocal()
 
     def is_single_value_relation(self, relation):
         return relation in SINGLE_VALUE_RELATIONS
