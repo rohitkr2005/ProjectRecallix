@@ -150,6 +150,7 @@ def evaluate_update_semantics(
     value: str,
     active_memories: Optional[Iterable] = None,
     is_single_value_fn: Optional[Callable[[str], bool]] = None,
+    temporal_state: Optional[str] = None,
 ) -> Tuple[UpdateSemanticsDecision, Optional[any], str]:
     """
     Determine whether incoming information is a duplicate, a conflict requiring supersession,
@@ -161,28 +162,34 @@ def evaluate_update_semantics(
     if not active_memories:
         return UpdateSemanticsDecision.NEW_MEMORY, None, "no_active_memories"
 
+    incoming_temp = str(temporal_state or "PRESENT").upper()
+
     # 1. Check for exact active duplicate
     for mem in active_memories:
+        mem_temp = str(getattr(mem, "temporal_state", "PRESENT") or "PRESENT").upper()
         if (
             getattr(mem, "active", False)
             and getattr(mem, "subject", None) == subject
             and getattr(mem, "relation", None) == relation
             and getattr(mem, "value", None) == value
+            and mem_temp == incoming_temp
         ):
             return UpdateSemanticsDecision.DUPLICATE, mem, f"exact_duplicate_of:{getattr(mem, 'id', None)}"
 
-    # 2. Check for single-value conflict
+    # 2. Check for single-value conflict within the same temporal horizon
     if is_single_value_fn and is_single_value_fn(relation):
         for mem in active_memories:
+            mem_temp = str(getattr(mem, "temporal_state", "PRESENT") or "PRESENT").upper()
             if (
                 getattr(mem, "active", False)
                 and getattr(mem, "subject", None) == subject
                 and getattr(mem, "relation", None) == relation
                 and getattr(mem, "value", None) != value
+                and mem_temp == incoming_temp
             ):
                 return UpdateSemanticsDecision.CONFLICT_SUPERSEDE, mem, f"conflicts_with:{getattr(mem, 'id', None)}"
 
-    # 3. New memory (novel fact or multi-value addition)
+    # 3. New memory (novel fact or multi-value addition or distinct temporal state)
     return UpdateSemanticsDecision.NEW_MEMORY, None, "new_memory"
 
 

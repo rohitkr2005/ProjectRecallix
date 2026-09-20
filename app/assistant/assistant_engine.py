@@ -2,8 +2,12 @@ from enum import Enum
 import re
 
 from app.llm.llm_engine import LLMEngine, UNSUPPORTED_RESPONSE
+from app.memory.forgetting import MemoryForgetter
+from app.memory.graph import MemoryGraph
+from app.memory.importance_learning import ImportanceLearner
 from app.memory.memory_extractor import MemoryExtractor
 from app.memory.memory_store import MemoryStore
+from app.memory.temporal import detect_query_temporal_intent, detect_temporal_state
 from app.retrieval.retrieval_engine import RetrievalEngine
 
 
@@ -35,6 +39,9 @@ class AssistantEngine:
         llm_engine=None,
         memory_store=None,
         memory_extractor=None,
+        importance_learner=None,
+        memory_graph=None,
+        memory_forgetter=None,
     ):
         self.retrieval_engine = retrieval_engine or RetrievalEngine(memory_store=memory_store)
         self.llm_engine = llm_engine or LLMEngine()
@@ -45,6 +52,16 @@ class AssistantEngine:
         )
         self.memory_extractor = memory_extractor or MemoryExtractor()
         self.embedding_engine = getattr(self.retrieval_engine, "embedding_engine", None)
+        self.importance_learner = importance_learner or ImportanceLearner(
+            session=getattr(self.memory_store, "session", None)
+        )
+        self.memory_graph = memory_graph or MemoryGraph(
+            session=getattr(self.memory_store, "session", None)
+        )
+        self.memory_forgetter = memory_forgetter or MemoryForgetter(
+            session=getattr(self.memory_store, "session", None),
+            importance_learner=self.importance_learner,
+        )
 
     def is_available(self):
         return self.llm_engine.is_available()
@@ -85,7 +102,7 @@ class AssistantEngine:
         else:
             return InputType.NEITHER
 
-    def save_extracted_memories(self, extracted_memories):
+    def save_extracted_memories(self, extracted_memories, temporal_state=None):
         """Save extracted memories into MemoryStore using lifecycle semantics."""
         saved = []
         if not extracted_memories:
@@ -97,6 +114,7 @@ class AssistantEngine:
             value = getattr(mem, "value", "")
             category = getattr(mem, "category", "GENERAL")
             importance = getattr(mem, "importance", 5)
+            temp_state = getattr(mem, "temporal_state", None) or temporal_state or "PRESENT"
 
             embedding = None
             if self.embedding_engine and hasattr(self.embedding_engine, "generate_memory_embedding"):
@@ -117,7 +135,19 @@ class AssistantEngine:
                 category=category,
                 importance=importance,
                 embedding=embedding,
+                temporal_state=temp_state,
             )
+
+            # Update memory graph
+            if hasattr(self, "memory_graph") and self.memory_graph:
+                self.memory_graph.add_edge(
+                    source=subject,
+                    relation=relation,
+                    target=value,
+                    category=category,
+                    memory_id=getattr(memory, "id", None),
+                )
+
             saved.append({
                 "memory": memory,
                 "status": status,
@@ -127,6 +157,7 @@ class AssistantEngine:
                 "value": value,
                 "category": category,
                 "importance": importance,
+                "temporal_state": temp_state,
             })
         return saved
 
@@ -270,12 +301,13 @@ class AssistantEngine:
         input_type = self.classify_input(user_message)
         saved_records = []
 
+        temporal_state = detect_temporal_state(user_message)
         # 9.2 / 9.3: Handle statement extraction for STATEMENT or BOTH
         if input_type in (InputType.STATEMENT, InputType.BOTH):
             try:
                 extracted = self.memory_extractor.extract(user_message)
                 if extracted:
-                    saved_records = self.save_extracted_memories(extracted)
+                    saved_records = self.save_extracted_memories(extracted, temporal_state=temporal_state)
             except Exception:
                 saved_records = []
 
@@ -438,6 +470,17 @@ class AssistantEngine:
             lambda r, m: {"grounded": True, "supported_values": [], "grounding_score": 1.0, "details": "Unverified"},
         )(response, relevant_memories)
 
+        # 10.2 / 10.3: Feedback & Reinforcement
+        if relevant_memories and hasattr(self, "importance_learner") and self.importance_learner:
+            try:
+                sup_vals = grounding.get("supported_values", [])
+                self.importance_learner.apply_retrieval_feedback(
+                    retrieved_memories=relevant_memories,
+                    supported_values=sup_vals,
+                )
+            except Exception:
+                pass
+
         result = {
             "response": response,
             "input_type": input_type,
@@ -468,5 +511,7 @@ class AssistantEngine:
             self.llm_engine.close()
         if hasattr(self.memory_store, "close") and callable(self.memory_store.close):
             self.memory_store.close()
+        if hasattr(self.memory_graph, "clear") and callable(self.memory_graph.clear):
+            self.memory_graph.clear()
 
 

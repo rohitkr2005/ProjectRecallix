@@ -112,7 +112,8 @@ class MemoryStore:
         category,
         importance=5,
         embedding=None,
-        update_duplicate_importance=True
+        update_duplicate_importance=True,
+        temporal_state=None,
     ):
         """
         Save memory and return explainable update semantics metadata.
@@ -124,7 +125,8 @@ class MemoryStore:
             relation=relation,
             value=value,
             active_memories=active_memories,
-            is_single_value_fn=self.is_single_value_relation
+            is_single_value_fn=self.is_single_value_relation,
+            temporal_state=temporal_state,
         )
 
         superseded_memory_id = None
@@ -145,6 +147,7 @@ class MemoryStore:
             matched.active = False
             superseded_memory_id = matched.id
 
+        temporal = str(temporal_state or "PRESENT").upper()
         memory = Memory(
             subject=subject,
             relation=relation,
@@ -152,7 +155,8 @@ class MemoryStore:
             category=category,
             importance=importance,
             active=True,
-            embedding=embedding
+            embedding=embedding,
+            temporal_state=temporal,
         )
 
         self.session.add(memory)

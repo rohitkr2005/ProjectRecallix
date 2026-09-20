@@ -164,10 +164,13 @@ class MemoryExtractor:
     ) -> List[ExtractedMemory]:
 
         patterns = [
-            r"\bI\s+live\s+in\s+(.+)",
+            r"\b(?:I\s+)?(?:previously|formerly|used to)\s+(?:live|lived)\s+in\s+(.+)",
+            r"\b(?:I\s+)?lived\s+in\s+(.+)",
+            r"\b(?:I\s+)?(?:currently\s+)?(?:live|lives)\s+in\s+(.+)",
             r"\bI\s+am\s+from\s+(.+)",
             r"\bI'm\s+from\s+(.+)",
             r"\bI\s+moved\s+to\s+(.+)",
+            r"\b(?:I\s+)?plans?\s+to\s+move\s+to\s+(.+)",
         ]
 
         for pattern in patterns:
@@ -434,6 +437,9 @@ class MemoryExtractor:
             "",
             value
         )
+
+        # Strip trailing temporal words (e.g. 'Delhi before' -> 'Delhi')
+        value = re.sub(r"\s+\b(?:before|now|currently)\b$", "", value, flags=re.IGNORECASE)
 
         value = value.strip(" ,;:")
 
