@@ -1,6 +1,7 @@
 from enum import Enum
 import re
 
+from app.config import settings
 from app.llm.llm_engine import LLMEngine, UNSUPPORTED_RESPONSE
 from app.memory.forgetting import MemoryForgetter
 from app.memory.graph import MemoryGraph
@@ -9,6 +10,15 @@ from app.memory.memory_extractor import MemoryExtractor
 from app.memory.memory_store import MemoryStore
 from app.memory.temporal import detect_query_temporal_intent, detect_temporal_state
 from app.retrieval.retrieval_engine import RetrievalEngine
+from app.utils.logging import (
+    get_logger,
+    log_error_event,
+    log_llm_event,
+    log_memory_event,
+    log_retrieval_event,
+)
+from app.utils.metrics import LatencyTracker
+from app.utils.validators import validate_memory_content, validate_user_query
 
 
 class InputType(str, Enum):
@@ -43,6 +53,7 @@ class AssistantEngine:
         memory_graph=None,
         memory_forgetter=None,
     ):
+        self.logger = get_logger("recallix.assistant")
         self.retrieval_engine = retrieval_engine or RetrievalEngine(memory_store=memory_store)
         self.llm_engine = llm_engine or LLMEngine()
         self.memory_store = (
@@ -115,6 +126,19 @@ class AssistantEngine:
             category = getattr(mem, "category", "GENERAL")
             importance = getattr(mem, "importance", 5)
             temp_state = getattr(mem, "temporal_state", None) or temporal_state or "PRESENT"
+
+            # 11.5 Memory Safety: Validate & sanitize memory content
+            try:
+                val = validate_memory_content(
+                    subject=subject,
+                    relation=relation,
+                    value=value,
+                    category=category,
+                )
+                subject, relation, value, category = val["subject"], val["relation"], val["value"], val["category"]
+            except Exception as e:
+                log_error_event(self.logger, "memory_validation_failed", error=e)
+                continue
 
             embedding = None
             if self.embedding_engine and hasattr(self.embedding_engine, "generate_memory_embedding"):
@@ -294,22 +318,32 @@ class AssistantEngine:
         include_explanations=False,
         fallback_to_extractive=True,
     ):
-        if not user_message or not user_message.strip():
-            raise ValueError("User message cannot be empty.")
+        user_message = validate_user_query(user_message)
+        tracker = LatencyTracker()
 
-        user_message = user_message.strip()
         input_type = self.classify_input(user_message)
         saved_records = []
 
         temporal_state = detect_temporal_state(user_message)
         # 9.2 / 9.3: Handle statement extraction for STATEMENT or BOTH
         if input_type in (InputType.STATEMENT, InputType.BOTH):
-            try:
-                extracted = self.memory_extractor.extract(user_message)
-                if extracted:
-                    saved_records = self.save_extracted_memories(extracted, temporal_state=temporal_state)
-            except Exception:
-                saved_records = []
+            with tracker.timer("memory_ms"):
+                try:
+                    extracted = self.memory_extractor.extract(user_message)
+                    if extracted:
+                        saved_records = self.save_extracted_memories(extracted, temporal_state=temporal_state)
+                        for r in saved_records:
+                            log_memory_event(
+                                self.logger,
+                                "saved",
+                                memory_id=getattr(r.get("memory"), "id", None),
+                                subject=r.get("subject"),
+                                relation=r.get("relation"),
+                                status=r.get("status"),
+                            )
+                except Exception as e:
+                    log_error_event(self.logger, "memory_extraction_failed", error=e)
+                    saved_records = []
 
         # 1. Pure STATEMENT handling
         if input_type == InputType.STATEMENT:
@@ -358,6 +392,8 @@ class AssistantEngine:
                 result["retrieval_explanations"] = []
                 result["explanations"] = []
                 result["why_used"] = []
+            if settings.enable_metrics:
+                result["performance_metrics"] = tracker.get_metrics()
             return result
 
         # 2. Pure NEITHER (chit-chat / greeting) handling
@@ -395,14 +431,29 @@ class AssistantEngine:
                 result["retrieval_explanations"] = []
                 result["explanations"] = []
                 result["why_used"] = []
+            if settings.enable_metrics:
+                result["performance_metrics"] = tracker.get_metrics()
             return result
 
         # 3. QUESTION or BOTH handling
-        retrieved_memories = self.retrieval_engine.search(
+        with tracker.timer("retrieval_ms"):
+            retrieved_memories = self.retrieval_engine.search(
+                query=user_message,
+                top_k=top_k,
+                min_score=min_score,
+                semantic_threshold=semantic_threshold,
+            )
+
+        top_score = (
+            float(retrieved_memories[0].get("score", 0.0))
+            if retrieved_memories and isinstance(retrieved_memories[0], dict)
+            else 0.0
+        )
+        log_retrieval_event(
+            self.logger,
             query=user_message,
-            top_k=top_k,
-            min_score=min_score,
-            semantic_threshold=semantic_threshold,
+            count=len(retrieved_memories),
+            top_score=top_score,
         )
 
         intent_analysis = self._analyze_intent(user_message)
@@ -444,25 +495,31 @@ class AssistantEngine:
                 result["retrieval_explanations"] = explanations
                 result["explanations"] = user_explanations
                 result["why_used"] = user_explanations
+            if settings.enable_metrics:
+                result["performance_metrics"] = tracker.get_metrics()
             return result
 
         llm_status = "success"
-        try:
-            response = self.llm_engine.generate_with_memories(
-                user_message=user_message,
-                memories=relevant_memories,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-        except Exception as error:
-            if not fallback_to_extractive:
-                raise
-            context_text = self.llm_engine.build_memory_context(relevant_memories)
-            response = (
-                "I'm currently unable to reach the local LLM runtime. "
-                f"Based directly on your stored memory:\n{context_text}"
-            )
-            llm_status = f"fallback: {str(error)}"
+        with tracker.timer("llm_ms"):
+            try:
+                response = self.llm_engine.generate_with_memories(
+                    user_message=user_message,
+                    memories=relevant_memories,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+            except Exception as error:
+                log_error_event(self.logger, "llm_generation_failed", error=error)
+                if not fallback_to_extractive:
+                    raise
+                context_text = self.llm_engine.build_memory_context(relevant_memories)
+                response = (
+                    "I'm currently unable to reach the local LLM runtime. "
+                    f"Based directly on your stored memory:\n{context_text}"
+                )
+                llm_status = f"fallback: {str(error)}"
+
+        log_llm_event(self.logger, prompt=user_message, status=llm_status)
 
         grounding = getattr(
             self.llm_engine,
@@ -499,6 +556,8 @@ class AssistantEngine:
             result["retrieval_explanations"] = explanations
             result["explanations"] = user_explanations
             result["why_used"] = user_explanations
+        if settings.enable_metrics:
+            result["performance_metrics"] = tracker.get_metrics()
         return result
 
     # 9.1: Unified alias

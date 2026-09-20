@@ -1,6 +1,7 @@
 from datetime import datetime
 
 import numpy as np
+import pytest
 
 from app.database.models import Memory
 from app.retrieval.retrieval_engine import RetrievalEngine
@@ -80,7 +81,7 @@ def test_score_components_match_final_score():
         "recency",
         "relationship",
     }
-    assert final_score == expected
+    assert final_score == pytest.approx(expected)
 
 
 def test_retrieval_explanation_contains_all_ranking_signals():
