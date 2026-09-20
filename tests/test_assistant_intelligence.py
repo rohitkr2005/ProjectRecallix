@@ -296,3 +296,143 @@ def test_explainable_responses_exposes_why_used_without_internals():
     assert "id=42" not in explanation
     assert "vector" not in explanation
     assert "blob" not in explanation
+
+
+# =====================================================================
+# 9.6 — Interactive Chat Interface (ChatCLI)
+# =====================================================================
+
+
+def test_chat_cli_commands():
+    """Verify ChatCLI handles slash commands (/help, /memories, /explain, /exit)."""
+    from io import StringIO
+    from app.chat.cli import ChatCLI
+
+    assistant, store, _, _ = create_in_memory_assistant()
+    out = StringIO()
+    cli = ChatCLI(assistant=assistant, out_stream=out)
+
+    # Test /help
+    assert cli.handle_command("/help") is True
+    assert "PROJECT RECALLIX" in out.getvalue()
+
+    # Test /memories on empty
+    out.truncate(0)
+    out.seek(0)
+    assert cli.handle_command("/memories") is True
+    assert "No active memories" in out.getvalue()
+
+    # Test /explain toggle
+    out.truncate(0)
+    out.seek(0)
+    assert cli.include_explanations is False
+    assert cli.handle_command("/explain") is True
+    assert cli.include_explanations is True
+    assert "ENABLED" in out.getvalue()
+
+    # Test /exit
+    out.truncate(0)
+    out.seek(0)
+    assert cli.handle_command("/exit") is False
+    assert "Goodbye" in out.getvalue()
+
+
+def test_chat_cli_process_input():
+    """Verify ChatCLI.process_input formats assistant output cleanly."""
+    from io import StringIO
+    from app.chat.cli import ChatCLI
+
+    assistant, store, _, _ = create_in_memory_assistant()
+    out = StringIO()
+    cli = ChatCLI(assistant=assistant, out_stream=out)
+
+    output = cli.process_input("I work on Project Recallix.")
+    assert "Recallix > Got it." in output
+    assert "works on -> Project Recallix" in output
+
+    # Check /memories after storing
+    out.truncate(0)
+    out.seek(0)
+    cli.handle_command("/memories")
+    assert "Project Recallix" in out.getvalue()
+
+
+# =====================================================================
+# 9.7 — Conversational Lifecycle Hardening
+# =====================================================================
+
+
+def test_conversation_lifecycle_superseding():
+    """Verify multi-turn flow where memory is updated/superseded and subsequent question uses new fact."""
+    assistant, store, retrieval, llm = create_in_memory_assistant()
+
+    # Turn 1: User says they live in Delhi
+    turn_1 = assistant.respond("I live in Delhi.")
+    assert turn_1["input_type"] == InputType.STATEMENT
+    assert "remembered" in turn_1["response"].lower()
+    delhi_mems = store.get_all_memories()
+    assert len(delhi_mems) == 1
+    assert delhi_mems[0].value == "Delhi"
+    assert delhi_mems[0].active is True
+
+    # Turn 2: User says they moved to Mumbai
+    turn_2 = assistant.respond("I moved to Mumbai.")
+    assert turn_2["input_type"] == InputType.STATEMENT
+    assert "updated" in turn_2["response"].lower()
+
+    # Verify Delhi is now inactive and Mumbai is active
+    active_mems = store.get_all_memories()
+    inactive_mems = store.get_archived_memories()
+
+    assert len(active_mems) == 1
+    assert active_mems[0].value == "Mumbai"
+    assert len(inactive_mems) == 1
+    assert inactive_mems[0].value == "Delhi"
+
+    # Turn 3: User asks where they live
+    retrieval.search.return_value = [
+        {
+            "memory": active_mems[0],
+            "score": 0.95,
+            "explanation": {"relevance": 0.95, "reasons": ["LOCATION match"]},
+        }
+    ]
+    retrieval._detect_query_intent.return_value = "LOCATION"
+    llm.generate_with_memories.return_value = "You live in Mumbai."
+    llm.verify_answer_grounding.return_value = {
+        "grounded": True,
+        "supported_values": ["Mumbai"],
+        "grounding_score": 1.0,
+        "details": "Grounded to active location.",
+    }
+
+    turn_3 = assistant.respond("Where do I live?")
+    assert turn_3["input_type"] == InputType.QUESTION
+    assert turn_3["response"] == "You live in Mumbai."
+    assert turn_3["supported"] is True
+    assert turn_3["grounded"] is True
+
+
+def test_conversation_unsupported_question():
+    """Verify conversational question with no relevant memories is safely declined."""
+    assistant, store, retrieval, llm = create_in_memory_assistant()
+    retrieval.search.return_value = []
+    retrieval._detect_query_intent.return_value = None
+
+    result = assistant.respond("What is my favorite movie?")
+    assert result["input_type"] == InputType.QUESTION
+    assert result["supported"] is False
+    assert result["grounded"] is True
+    assert result["response"] == assistant.UNSUPPORTED_RESPONSE
+
+
+def test_conversation_empty_and_whitespace_validation():
+    """Verify empty or whitespace-only inputs raise ValueError."""
+    assistant, _, _, _ = create_in_memory_assistant()
+
+    with pytest.raises(ValueError, match="User message cannot be empty"):
+        assistant.respond("")
+
+    with pytest.raises(ValueError, match="User message cannot be empty"):
+        assistant.respond("   \n\t  ")
+

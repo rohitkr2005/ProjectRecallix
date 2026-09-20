@@ -285,9 +285,21 @@ class AssistantEngine:
                 if len(saved_records) == 1:
                     rec = saved_records[0]
                     rel = rec["relation"].replace("_", " ")
-                    response_text = f"Got it. I've remembered that you {rel} {rec['value']}."
+                    is_updated = (
+                        rec.get("status") == "updated"
+                        or bool(rec.get("metadata", {}).get("superseded_memory_id"))
+                    )
+                    verb = "updated" if is_updated else "remembered"
+                    response_text = f"Got it. I've {verb} that you {rel} {rec['value']}."
                 else:
-                    response_text = f"Got it. I've remembered these {len(saved_records)} facts."
+                    updated_count = sum(
+                        1 for r in saved_records
+                        if r.get("status") == "updated" or bool(r.get("metadata", {}).get("superseded_memory_id"))
+                    )
+                    if updated_count == len(saved_records):
+                        response_text = f"Got it. I've updated these {len(saved_records)} facts."
+                    else:
+                        response_text = f"Got it. I've recorded these {len(saved_records)} facts."
             else:
                 response_text = "Got it. Thanks for sharing!"
 
