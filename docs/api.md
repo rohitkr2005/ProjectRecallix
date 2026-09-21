@@ -236,3 +236,39 @@ metrics = tracker.get_metrics()
   - `LLMError`: Ollama communication or generation failures.
   - `MemoryValidationError`: Malformed memory content (inherits from `ValueError`).
   - `InvalidQueryError`: Invalid or empty user queries (inherits from `ValueError`).
+
+---
+
+## 6. REST API Reference (Phase 15 🌐)
+
+Recallix provides a full FastAPI REST API with JWT bearer authentication and multi-user isolation.
+
+### Base URL & Interactive Documentation
+- **API Base URL**: `http://localhost:8000`
+- **Interactive Swagger UI**: `http://localhost:8000/docs`
+- **ReDoc UI**: `http://localhost:8000/redoc`
+- **Web Application UI**: `http://localhost:8000/`
+
+### Authentication
+Endpoints marked with 🔒 require the HTTP header:
+```text
+Authorization: Bearer <JWT_ACCESS_TOKEN>
+```
+
+### Endpoints Overview
+
+| Method | Path | Auth | Description |
+| :--- | :--- | :---: | :--- |
+| `GET` | `/api/health` | No | System health, database connection, and LLM configuration |
+| `POST` | `/api/v1/auth/register` | No | Register a new user account |
+| `POST` | `/api/v1/auth/login` | No | Authenticate user and obtain JWT access token |
+| `GET` | `/api/v1/auth/me` | 🔒 | Get profile of currently authenticated user |
+| `POST` | `/api/v1/chat` | 🔒 | Send chat message with memory retrieval & grounding |
+| `GET` | `/api/v1/memories` | 🔒 | List user memories (pagination, category & text filters) |
+| `POST` | `/api/v1/memories` | 🔒 | Create and embed a new memory |
+| `GET` | `/api/v1/memories/{id}` | 🔒 | Retrieve a single memory by ID |
+| `PUT` | `/api/v1/memories/{id}` | 🔒 | Update an existing memory (auto-re-embedding) |
+| `DELETE` | `/api/v1/memories/{id}` | 🔒 | Archive a memory (soft-delete) |
+| `POST` | `/api/v1/memories/{id}/restore`| 🔒 | Restore an archived memory |
+| `POST` | `/api/v1/search` | 🔒 | Multi-factor semantic & relational memory search |
+

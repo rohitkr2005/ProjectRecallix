@@ -1,7 +1,7 @@
 # Project Recallix 🧠⚡
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-261%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-294%20passed-brightgreen.svg)]()
 [![Benchmark](https://img.shields.io/badge/retrieval%20hit--rate-100%25-success.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Release](https://img.shields.io/badge/release-v1.0.0-blueviolet.svg)](RELEASE_NOTES.md)
@@ -148,7 +148,13 @@ Traditional Large Language Models (LLMs) suffer from three fundamental limitatio
    python main.py
    ```
 
-5. **Run the interactive showcase demo**:
+5. **Launch the Recallix Web Application 🌐**:
+   ```powershell
+   uvicorn app.api.app:app --reload
+   ```
+   Open **`http://localhost:8000/`** in your browser to interact with the modern glassmorphic web dashboard, chat with Recallix, and manage your memory cortex!
+
+6. **Run the interactive showcase demo (CLI)**:
    ```powershell
    python demo.py
    ```
@@ -221,6 +227,10 @@ python -m app.retrieval.retrieval_benchmark_runner
 ```
 ProjectRecallix/
 ├── app/
+│   ├── api/                    # FastAPI REST API, schemas, and JWT auth
+│   │   ├── app.py              # Main FastAPI application & routers
+│   │   ├── auth.py             # Password hashing, JWT & dependencies
+│   │   └── schemas.py          # Pydantic v2 request/response schemas
 │   ├── assistant/              # High-level assistant pipeline & orchestration
 │   │   └── assistant_engine.py # Unified AssistantEngine interface
 │   ├── config.py               # Centralized Settings & environment variables
@@ -251,14 +261,23 @@ ProjectRecallix/
 │       ├── metrics.py          # LatencyTracker sub-millisecond timer
 │       └── validators.py       # Input sanitization & vector validation
 ├── docs/                       # Detailed documentation
-│   ├── api.md                  # Complete public API reference
+│   ├── api.md                  # Complete public API reference & REST API
 │   ├── architecture.md         # Deep dive into system architecture
 │   ├── benchmark.md            # Benchmark dataset and evaluation guide
 │   └── development.md          # Developer setup, testing, and contribution
-├── tests/                      # 261 comprehensive unit & integration tests
+├── frontend/                   # Phase 15 Web Application (HTML/CSS/JS)
+│   ├── css/styles.css          # Modern glassmorphic design system
+│   ├── js/api.js               # RecallixAPI client class
+│   ├── js/app.js               # UI view & state management
+│   └── index.html              # Responsive single-page app
+├── tests/                      # 294 comprehensive unit & integration tests
 │   ├── test_advanced_memory_intelligence.py
+│   ├── test_api_auth.py
+│   ├── test_api_chat_and_memories.py
+│   ├── test_api_e2e.py
 │   ├── test_assistant_intelligence.py
 │   ├── test_assistant_pipeline.py
+│   ├── test_final_evaluation.py
 │   ├── test_llm_reasoning.py
 │   ├── test_memory_lifecycle.py
 │   ├── test_production_hardening.py
@@ -286,7 +305,7 @@ For detailed guides, please explore our `docs/` directory:
 
 ## 🧪 Development & Testing
 
-Run the full test suite (261 tests):
+Run the full test suite (294 tests):
 ```powershell
 python -m pytest tests/ -v
 ```
