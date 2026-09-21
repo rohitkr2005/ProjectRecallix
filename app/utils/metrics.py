@@ -30,7 +30,7 @@ class LatencyTracker:
     def get_metrics(self) -> Dict[str, float]:
         """Return a copy of all recorded latency metrics including total_ms."""
         res = dict(self.metrics)
-        if "total_ms" not in res and res:
+        if "total_ms" not in res:
             res["total_ms"] = round(sum(res.values()), 2)
         return res
 

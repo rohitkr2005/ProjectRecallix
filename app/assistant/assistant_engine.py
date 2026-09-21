@@ -398,15 +398,16 @@ class AssistantEngine:
 
         # 2. Pure NEITHER (chit-chat / greeting) handling
         if input_type == InputType.NEITHER:
-            msg_lower = user_message.lower()
-            if any(w in msg_lower for w in ["hi", "hello", "hey"]):
-                reply = "Hello! How can I help you today?"
-            elif any(w in msg_lower for w in ["thank", "thanks"]):
-                reply = "You're welcome!"
-            elif any(w in msg_lower for w in ["bye", "goodbye"]):
-                reply = "Goodbye! Let me know whenever you need anything."
-            else:
-                reply = "I'm here to answer your questions and manage your memories."
+            with tracker.timer("chit_chat_ms"):
+                msg_lower = user_message.lower()
+                if any(w in msg_lower for w in ["hi", "hello", "hey"]):
+                    reply = "Hello! How can I help you today?"
+                elif any(w in msg_lower for w in ["thank", "thanks"]):
+                    reply = "You're welcome!"
+                elif any(w in msg_lower for w in ["bye", "goodbye"]):
+                    reply = "Goodbye! Let me know whenever you need anything."
+                else:
+                    reply = "I'm here to answer your questions and manage your memories."
 
             result = {
                 "response": reply,
