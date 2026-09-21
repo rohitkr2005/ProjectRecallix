@@ -4,7 +4,7 @@
 [![Tests](https://img.shields.io/badge/tests-261%20passed-brightgreen.svg)]()
 [![Benchmark](https://img.shields.io/badge/retrieval%20hit--rate-100%25-success.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/phase-12%20complete-blueviolet.svg)]()
+[![Release](https://img.shields.io/badge/release-v1.0.0-blueviolet.svg)](RELEASE_NOTES.md)
 
 > **Project Recallix** is a high-performance, long-term memory-augmented conversational assistant that endows local and cloud LLMs with persistent, evolving, and grounded memory.
 
@@ -146,6 +146,11 @@ Traditional Large Language Models (LLMs) suffer from three fundamental limitatio
 4. **Initialize database**:
    ```powershell
    python main.py
+   ```
+
+5. **Run the interactive showcase demo**:
+   ```powershell
+   python demo.py
    ```
 
 ---
