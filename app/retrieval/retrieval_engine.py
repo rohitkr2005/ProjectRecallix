@@ -313,7 +313,7 @@ class RetrievalEngine:
             return (item["score"], semantic_score, importance_score, timestamp_value, -memory_id)
         return sorted(results, key=sort_key, reverse=True)
 
-    def search(self, query, top_k=5, min_score=0.0, semantic_threshold=0.0):
+    def search(self, query, top_k=5, min_score=0.0, semantic_threshold=0.0, user_id=None):
         if not query or not str(query).strip():
             return []
         if top_k <= 0:
@@ -322,7 +322,16 @@ class RetrievalEngine:
         query = self._normalize_query(query)
         query_embedding = self.embedding_engine.generate_embedding(query)
         query_intent = self._detect_query_intent(query)
-        memories = self.memory_store.get_all_memories()
+        if user_id is not None:
+            try:
+                memories = self.memory_store.get_all_memories(user_id=user_id)
+            except TypeError:
+                memories = [
+                    m for m in self.memory_store.get_all_memories()
+                    if getattr(m, "user_id", None) == user_id
+                ]
+        else:
+            memories = self.memory_store.get_all_memories()
         results = []
 
         for memory in memories:

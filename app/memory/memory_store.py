@@ -65,9 +65,10 @@ class MemoryStore:
         category,
         importance=5,
         embedding=None,
-        update_duplicate_importance=True
+        update_duplicate_importance=True,
+        user_id=None,
     ):
-        active_memories = self.get_all_memories()
+        active_memories = self.get_all_memories(user_id=user_id)
         decision, matched, reason = evaluate_update_semantics(
             subject=subject,
             relation=relation,
@@ -89,6 +90,7 @@ class MemoryStore:
 
         # Create new memory
         memory = Memory(
+            user_id=user_id,
             subject=subject,
             relation=relation,
             value=value,
@@ -114,12 +116,13 @@ class MemoryStore:
         embedding=None,
         update_duplicate_importance=True,
         temporal_state=None,
+        user_id=None,
     ):
         """
         Save memory and return explainable update semantics metadata.
         Returns: (memory, status, metadata_dict)
         """
-        active_memories = self.get_all_memories()
+        active_memories = self.get_all_memories(user_id=user_id)
         decision, matched, reason = evaluate_update_semantics(
             subject=subject,
             relation=relation,
@@ -149,6 +152,7 @@ class MemoryStore:
 
         temporal = str(temporal_state or "PRESENT").upper()
         memory = Memory(
+            user_id=user_id,
             subject=subject,
             relation=relation,
             value=value,
@@ -236,10 +240,11 @@ class MemoryStore:
             .first()
         )
 
-    def get_all_memories(self):
-        statement = select(Memory).where(
-            Memory.active.is_(True)
-        ).order_by(Memory.id)
+    def get_all_memories(self, user_id=None):
+        query = select(Memory).where(Memory.active.is_(True))
+        if user_id is not None:
+            query = query.where(Memory.user_id == user_id)
+        statement = query.order_by(Memory.id)
 
         return (
             self.session.execute(statement)
@@ -247,10 +252,11 @@ class MemoryStore:
             .all()
         )
 
-    def get_archived_memories(self):
-        statement = select(Memory).where(
-            Memory.active.is_(False)
-        ).order_by(Memory.id)
+    def get_archived_memories(self, user_id=None):
+        query = select(Memory).where(Memory.active.is_(False))
+        if user_id is not None:
+            query = query.where(Memory.user_id == user_id)
+        statement = query.order_by(Memory.id)
 
         return (
             self.session.execute(statement)
@@ -398,7 +404,7 @@ class MemoryStore:
         if allow_conflict:
             strategy = RestorationStrategy.FORCE
 
-        active_memories = self.get_all_memories()
+        active_memories = self.get_all_memories(user_id=memory.user_id if memory else None)
         can_restore, reason, conflicting_mem = validate_restoration_safety(
             memory=memory,
             active_memories=active_memories,
@@ -437,7 +443,7 @@ class MemoryStore:
             strategy = RestorationStrategy.FORCE
 
 
-        active_memories = self.get_all_memories()
+        active_memories = self.get_all_memories(user_id=memory.user_id if memory else None)
         can_restore, reason, conflicting_mem = validate_restoration_safety(
             memory=memory,
             active_memories=active_memories,

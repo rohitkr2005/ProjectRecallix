@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Recallix — AI Second Brain</title>
+  <meta name="description" content="Personal AI Second Brain with grounded memory, intelligent retrieval, and zero hallucination.">
+  <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+
+  <!-- ====================================================================
+       15.7 Authentication View (Modal Card)
+       ==================================================================== -->
+  <div id="authView" class="auth-wrapper">
+    <div class="glass-panel auth-card">
+      <div class="brand-header">
+        <div class="brand-icon">🧠</div>
+        <h1 class="brand-title">Project Recallix</h1>
+        <p class="brand-subtitle">Your personal AI Second Brain with grounded memory</p>
+      </div>
+
+      <div class="auth-tabs">
+        <button id="authTabLogin" class="auth-tab active">Sign In</button>
+        <button id="authTabRegister" class="auth-tab">Create Account</button>
+      </div>
+
+      <div id="authAlert" class="auth-alert"></div>
+
+      <!-- Sign In Form -->
+      <form id="loginForm">
+        <div class="form-group">
+          <label class="form-label" for="loginUsername">Username</label>
+          <input type="text" id="loginUsername" class="form-input" placeholder="Enter your username" required autocomplete="username">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="loginPassword">Password</label>
+          <input type="password" id="loginPassword" class="form-input" placeholder="••••••••" required autocomplete="current-password">
+        </div>
+        <button type="submit" class="btn-primary">
+          <span>Sign In</span>
+          <span>→</span>
+        </button>
+      </form>
+
+      <!-- Registration Form -->
+      <form id="registerForm" style="display: none;">
+        <div class="form-group">
+          <label class="form-label" for="regUsername">Username</label>
+          <input type="text" id="regUsername" class="form-input" placeholder="Choose a username (min 3 chars)" required minlength="3">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="regEmail">Email Address</label>
+          <input type="email" id="regEmail" class="form-input" placeholder="you@example.com" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="regPassword">Password</label>
+          <input type="password" id="regPassword" class="form-input" placeholder="Choose a password (min 6 chars)" required minlength="6">
+        </div>
+        <button type="submit" class="btn-primary">
+          <span>Create Account</span>
+          <span>→</span>
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ====================================================================
+       15.6 Main Dashboard Container
+       ==================================================================== -->
+  <div id="appContainer" class="app-container" style="display: none;">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-logo">🧠</div>
+        <div class="sidebar-brand">Recallix</div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <div class="nav-item active" data-view="chat" id="navChat">
+          <span class="nav-icon">💬</span>
+          <span>Assistant Chat</span>
+        </div>
+        <div class="nav-item" data-view="memories" id="navMemories">
+          <span class="nav-icon">🧠</span>
+          <span>My Memories</span>
+        </div>
+        <div class="nav-item" data-view="search" id="navSearch">
+          <span class="nav-icon">🔍</span>
+          <span>Search Sandbox</span>
+        </div>
+        <div class="nav-item" data-view="settings" id="navSettings">
+          <span class="nav-icon">⚙️</span>
+          <span>Settings</span>
+        </div>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="user-profile">
+          <div class="user-info">
+            <div id="currentUserAvatar" class="user-avatar">U</div>
+            <div id="currentUserName" class="user-name">User</div>
+          </div>
+          <button id="logoutBtn" class="btn-icon-logout" title="Sign Out">✕</button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      
+      <!-- 15.8 Chat View -->
+      <section id="chatSection" class="view-section active">
+        <div class="page-header">
+          <div>
+            <h2 class="page-title">Assistant Chat</h2>
+            <p class="page-description">Chat with your AI Second Brain. New facts are automatically remembered.</p>
+          </div>
+        </div>
+
+        <div class="glass-panel chat-container">
+          <div id="chatMessages" class="chat-messages">
+            <div class="chat-bubble assistant">
+              Hello! I'm Recallix, your personal AI Second Brain. Tell me about your projects, skills, goals, or preferences, or ask me anything you've previously taught me!
+            </div>
+          </div>
+
+          <div class="chat-input-bar">
+            <input type="text" id="chatInput" class="chat-input" placeholder="Type a statement or question (e.g. 'I am working on Recallix' or 'What are my projects?')...">
+            <button id="chatSendBtn" class="btn-send">Send</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 15.9 Memories View -->
+      <section id="memoriesSection" class="view-section">
+        <div class="page-header">
+          <div>
+            <h2 class="page-title">My Memories</h2>
+            <p class="page-description">Browse, filter, edit, archive, and manage your structured knowledge graph.</p>
+          </div>
+          <button id="addMemoryBtn" class="btn-primary" style="width: auto; padding: 10px 18px;">+ Add Memory</button>
+        </div>
+
+        <!-- Filter bar -->
+        <div style="display: flex; gap: 12px; margin-bottom: 24px; flex-wrap: wrap;">
+          <input type="text" id="memorySearchInput" class="form-input" style="max-width: 320px;" placeholder="Search memories...">
+          <select id="memoryCategoryFilter" class="form-input" style="max-width: 180px;">
+            <option value="">All Categories</option>
+            <option value="PROJECT">Projects</option>
+            <option value="SKILL">Skills</option>
+            <option value="EDUCATION">Education</option>
+            <option value="LOCATION">Location</option>
+            <option value="PREFERENCE">Preferences</option>
+            <option value="GOAL">Goals</option>
+            <option value="GENERAL">General</option>
+          </select>
+          <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); cursor: pointer;">
+            <input type="checkbox" id="showArchivedToggle"> Show Archived
+          </label>
+        </div>
+
+        <!-- Memory Grid -->
+        <div id="memoryGrid" class="memory-grid">
+          <!-- Populated dynamically by app.js -->
+        </div>
+      </section>
+
+      <!-- 15.10 Search Sandbox View -->
+      <section id="searchSection" class="view-section">
+        <div class="page-header">
+          <div>
+            <h2 class="page-title">Search Sandbox</h2>
+            <p class="page-description">Test semantic retrieval, cosine similarity, and multi-factor ranking signals.</p>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 12px; margin-bottom: 28px;">
+          <input type="text" id="searchInput" class="form-input" placeholder="Enter a search query to inspect retrieval ranking...">
+          <button id="searchBtn" class="btn-primary" style="width: auto; padding: 12px 24px;">Search</button>
+        </div>
+
+        <div id="searchResultsGrid" class="memory-grid">
+          <!-- Populated dynamically by app.js -->
+        </div>
+      </section>
+
+      <!-- 15.11 Settings & Diagnostics View -->
+      <section id="settingsSection" class="view-section">
+        <div class="page-header">
+          <div>
+            <h2 class="page-title">Settings & Diagnostics</h2>
+            <p class="page-description">Review system health, LLM connectivity, and user account details.</p>
+          </div>
+        </div>
+
+        <div class="memory-grid" style="grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));">
+          <div class="glass-panel memory-card">
+            <h3 style="font-size: 18px; margin-bottom: 12px;">System Health</h3>
+            <div style="font-size: 14px; line-height: 2; color: var(--text-secondary);">
+              <div>Database: <strong id="diagDbStatus" style="color: var(--status-success);">Checking...</strong></div>
+              <div>LLM Engine: <strong id="diagLlmStatus" style="color: var(--status-info);">Checking...</strong></div>
+              <div>API Version: <strong id="diagVersion" style="color: #ffffff;">1.0.0</strong></div>
+            </div>
+          </div>
+
+          <div class="glass-panel memory-card">
+            <h3 style="font-size: 18px; margin-bottom: 12px;">Active Account</h3>
+            <div style="font-size: 14px; line-height: 2; color: var(--text-secondary);">
+              <div>User ID: <strong id="diagUserId" style="color: #ffffff;">-</strong></div>
+              <div>Username: <strong id="diagUsername" style="color: var(--text-accent);">-</strong></div>
+              <div>Email: <strong id="diagEmail" style="color: #ffffff;">-</strong></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- ====================================================================
+       Add Memory Modal Dialog
+       ==================================================================== -->
+  <div id="memoryModal" class="modal-overlay">
+    <div class="glass-panel modal-box">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+        <h3 style="font-size: 20px; font-weight: 700;">Add New Memory</h3>
+        <button id="closeMemoryModal" style="background: none; border: none; color: var(--text-muted); font-size: 20px; cursor: pointer;">✕</button>
+      </div>
+
+      <form id="createMemoryForm">
+        <div class="form-group">
+          <label class="form-label" for="newMemRelation">Relation</label>
+          <input type="text" id="newMemRelation" class="form-input" placeholder="e.g. works_on, likes, lives_in" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="newMemValue">Value</label>
+          <input type="text" id="newMemValue" class="form-input" placeholder="e.g. Project Recallix, New York" required>
+        </div>
+        <div style="display: flex; gap: 12px;">
+          <div class="form-group" style="flex: 1;">
+            <label class="form-label" for="newMemCategory">Category</label>
+            <select id="newMemCategory" class="form-input">
+              <option value="GENERAL">General</option>
+              <option value="PROJECT">Project</option>
+              <option value="SKILL">Skill</option>
+              <option value="EDUCATION">Education</option>
+              <option value="LOCATION">Location</option>
+              <option value="PREFERENCE">Preference</option>
+              <option value="GOAL">Goal</option>
+            </select>
+          </div>
+          <div class="form-group" style="flex: 1;">
+            <label class="form-label" for="newMemImportance">Importance (1-10)</label>
+            <input type="number" id="newMemImportance" class="form-input" min="1" max="10" value="5">
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="newMemTemporal">Temporal Horizon</label>
+          <select id="newMemTemporal" class="form-input">
+            <option value="PRESENT">Present (Current)</option>
+            <option value="PAST">Past</option>
+            <option value="FUTURE">Future Goal</option>
+          </select>
+        </div>
+        <button type="submit" class="btn-primary" style="margin-top: 12px;">Save Memory</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

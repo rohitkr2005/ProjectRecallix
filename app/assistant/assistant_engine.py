@@ -113,7 +113,7 @@ class AssistantEngine:
         else:
             return InputType.NEITHER
 
-    def save_extracted_memories(self, extracted_memories, temporal_state=None):
+    def save_extracted_memories(self, extracted_memories, temporal_state=None, user_id=None):
         """Save extracted memories into MemoryStore using lifecycle semantics."""
         saved = []
         if not extracted_memories:
@@ -152,15 +152,22 @@ class AssistantEngine:
                 except Exception:
                     embedding = None
 
-            memory, status, metadata = self.memory_store.save_memory_with_semantics(
-                subject=subject,
-                relation=relation,
-                value=value,
-                category=category,
-                importance=importance,
-                embedding=embedding,
-                temporal_state=temp_state,
-            )
+            save_kwargs = {
+                "subject": subject,
+                "relation": relation,
+                "value": value,
+                "category": category,
+                "importance": importance,
+                "embedding": embedding,
+                "temporal_state": temp_state,
+            }
+            if user_id is not None:
+                save_kwargs["user_id"] = user_id
+            try:
+                memory, status, metadata = self.memory_store.save_memory_with_semantics(**save_kwargs)
+            except TypeError:
+                save_kwargs.pop("user_id", None)
+                memory, status, metadata = self.memory_store.save_memory_with_semantics(**save_kwargs)
 
             # Update memory graph
             if hasattr(self, "memory_graph") and self.memory_graph:
@@ -317,6 +324,7 @@ class AssistantEngine:
         memory_relevance=0.25,
         include_explanations=False,
         fallback_to_extractive=True,
+        user_id=None,
     ):
         user_message = validate_user_query(user_message)
         tracker = LatencyTracker()
@@ -331,7 +339,11 @@ class AssistantEngine:
                 try:
                     extracted = self.memory_extractor.extract(user_message)
                     if extracted:
-                        saved_records = self.save_extracted_memories(extracted, temporal_state=temporal_state)
+                        saved_records = self.save_extracted_memories(
+                            extracted,
+                            temporal_state=temporal_state,
+                            user_id=user_id,
+                        )
                         for r in saved_records:
                             log_memory_event(
                                 self.logger,
@@ -438,12 +450,19 @@ class AssistantEngine:
 
         # 3. QUESTION or BOTH handling
         with tracker.timer("retrieval_ms"):
-            retrieved_memories = self.retrieval_engine.search(
-                query=user_message,
-                top_k=top_k,
-                min_score=min_score,
-                semantic_threshold=semantic_threshold,
-            )
+            search_kwargs = {
+                "query": user_message,
+                "top_k": top_k,
+                "min_score": min_score,
+                "semantic_threshold": semantic_threshold,
+            }
+            if user_id is not None:
+                search_kwargs["user_id"] = user_id
+            try:
+                retrieved_memories = self.retrieval_engine.search(**search_kwargs)
+            except TypeError:
+                search_kwargs.pop("user_id", None)
+                retrieved_memories = self.retrieval_engine.search(**search_kwargs)
 
         top_score = (
             float(retrieved_memories[0].get("score", 0.0))
