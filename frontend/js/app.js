@@ -185,6 +185,33 @@ document.addEventListener("DOMContentLoaded", () => {
   // Chat Interface (15.8 & 15.10)
   // -------------------------------------------------------------------------
   let chatHistory = [];
+  let typingBubble = null;
+
+  function showTypingIndicator() {
+    if (typingBubble) return;
+    typingBubble = document.createElement("div");
+    typingBubble.className = "chat-bubble assistant typing-bubble";
+    typingBubble.id = "typingIndicator";
+    typingBubble.innerHTML = `
+      <div class="typing-indicator">
+        <div class="typing-dot"></div>
+        <div class="typing-dot"></div>
+        <div class="typing-dot"></div>
+      </div>
+      <span class="typing-text">Recallix is thinking...</span>
+    `;
+    chatMessages.appendChild(typingBubble);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  function hideTypingIndicator() {
+    if (typingBubble) {
+      typingBubble.remove();
+      typingBubble = null;
+    }
+    const existing = document.getElementById("typingIndicator");
+    if (existing) existing.remove();
+  }
 
   function appendChatMessage(text, sender = "user", meta = null) {
     const bubble = document.createElement("div");
@@ -195,16 +222,31 @@ document.addEventListener("DOMContentLoaded", () => {
     bubble.appendChild(textElem);
 
     if (sender === "assistant" && meta) {
-      // Grounding badge
-      if (meta.grounded && meta.supported) {
+      // Grounding / Assistant badge
+      if (meta.grounded && meta.memories && meta.memories.length > 0) {
         const badge = document.createElement("div");
         badge.className = "badge-grounded";
-        badge.innerHTML = "✓ Grounded Memory";
+        badge.innerHTML = "✓ Grounded in Memory";
         bubble.appendChild(badge);
-      } else if (!meta.supported) {
+      } else if (meta.extracted_memories && meta.extracted_memories.length > 0) {
+        const badge = document.createElement("div");
+        badge.className = "badge-grounded";
+        badge.innerHTML = "✓ Memory Remembered";
+        bubble.appendChild(badge);
+      } else if (meta.llm_status === "owner_identity") {
+        const badge = document.createElement("div");
+        badge.className = "badge-grounded";
+        badge.innerHTML = "✓ Owner Recognized";
+        bubble.appendChild(badge);
+      } else if (meta.supported === false) {
         const badge = document.createElement("div");
         badge.className = "badge-unsupported";
-        badge.innerHTML = "⚠ Unsupported / No Memory";
+        badge.innerHTML = "⚠ Not in Memory";
+        bubble.appendChild(badge);
+      } else if (meta.supported) {
+        const badge = document.createElement("div");
+        badge.className = "badge-grounded";
+        badge.innerHTML = "✦ AI Assistant";
         bubble.appendChild(badge);
       }
 
@@ -229,9 +271,11 @@ document.addEventListener("DOMContentLoaded", () => {
     chatInput.value = "";
     chatInput.disabled = true;
     chatSendBtn.disabled = true;
+    showTypingIndicator();
 
     try {
       const result = await api.chat(message, 5, true, chatHistory);
+      hideTypingIndicator();
       appendChatMessage(result.response, "assistant", result);
 
       // Track multi-turn conversation history (keep latest 20 turns)
@@ -246,8 +290,10 @@ document.addEventListener("DOMContentLoaded", () => {
         loadMemories();
       }
     } catch (err) {
+      hideTypingIndicator();
       appendChatMessage(`Error: ${err.message}`, "assistant");
     } finally {
+      hideTypingIndicator();
       chatInput.disabled = false;
       chatSendBtn.disabled = false;
       chatInput.focus();

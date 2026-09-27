@@ -21,6 +21,17 @@ GROUNDED_SYSTEM_PROMPT = (
     "Answer naturally, clearly, and directly."
 )
 
+PERSONAL_ASSISTANT_SYSTEM_PROMPT = (
+    "You are Recallix, an intelligent, helpful, and attentive personal AI assistant agent "
+    "(like Myra AI or Jarvis) with an integrated long-term memory second brain.\n"
+    "You have broad world knowledge and general intelligence across everyday topics, facts, coding, and problem-solving. "
+    "Answer the user's questions clearly, accurately, and conversationally.\n"
+    "When memory context about the user is provided, incorporate the user's personal facts, "
+    "preferences, and projects naturally into your answers.\n"
+    "If the user asks a question about their own private life or memories that is not recorded, "
+    "let them know you don't have that personal information in memory yet."
+)
+
 
 class LLMEngine:
     """
@@ -32,6 +43,7 @@ class LLMEngine:
 
     UNSUPPORTED_RESPONSE = UNSUPPORTED_RESPONSE
     GROUNDED_SYSTEM_PROMPT = GROUNDED_SYSTEM_PROMPT
+    PERSONAL_ASSISTANT_SYSTEM_PROMPT = PERSONAL_ASSISTANT_SYSTEM_PROMPT
 
     def __init__(
         self,
@@ -218,18 +230,31 @@ class LLMEngine:
         if fallback_on_empty and not self._has_supported_memories(memories):
             return self.UNSUPPORTED_RESPONSE
 
-        memory_context = self.build_memory_context(memories)
+        has_memories = bool(memories and self._has_supported_memories(memories))
 
-        effective_system_prompt = (
-            system_prompt or self.GROUNDED_SYSTEM_PROMPT
-        )
-
-        prompt = (
-            "Memory context:\n"
-            f"{memory_context}\n\n"
-            "User question:\n"
-            f"{user_message.strip()}"
-        )
+        if has_memories:
+            memory_context = self.build_memory_context(memories)
+            effective_system_prompt = (
+                system_prompt or self.GROUNDED_SYSTEM_PROMPT
+            )
+            if effective_system_prompt == self.GROUNDED_SYSTEM_PROMPT:
+                prompt = (
+                    "Memory context:\n"
+                    f"{memory_context}\n\n"
+                    "User question:\n"
+                    f"{user_message.strip()}"
+                )
+            else:
+                prompt = (
+                    f"User background notes & memories:\n{memory_context}\n\n"
+                    f"User request: {user_message.strip()}\n"
+                    "Instructions: Answer the user's request directly and helpfully using your knowledge. Only reference the background notes if directly relevant."
+                )
+        else:
+            effective_system_prompt = (
+                system_prompt or self.PERSONAL_ASSISTANT_SYSTEM_PROMPT
+            )
+            prompt = user_message.strip()
 
         return self.generate(
             prompt=prompt,

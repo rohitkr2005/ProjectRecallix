@@ -389,15 +389,20 @@ class AssistantEngine:
                 fetcher = getattr(self.memory_store, fetcher_name, None)
                 if callable(fetcher):
                     try:
-                        mems = fetcher(user_id=user_id) if "user_id" in fetcher.__code__.co_varnames else fetcher()
-                        for m in mems or []:
-                            if getattr(m, "relation", "") == "name" and getattr(m, "active", True):
-                                name = getattr(m, "value", None)
-                                break
-                        if name:
-                            break
+                        mems = fetcher(user_id=user_id) if user_id is not None else fetcher()
+                    except TypeError:
+                        try:
+                            mems = fetcher()
+                        except Exception:
+                            mems = []
                     except Exception:
-                        pass
+                        mems = []
+                    for m in mems or []:
+                        if getattr(m, "relation", "") == "name" and getattr(m, "active", True):
+                            name = getattr(m, "value", None)
+                            break
+                    if name:
+                        break
 
         if name:
             return (
@@ -710,12 +715,18 @@ class AssistantEngine:
         llm_status = "success"
         with tracker.timer("llm_ms"):
             try:
+                system_prompt_to_use = (
+                    getattr(self.llm_engine, "GROUNDED_SYSTEM_PROMPT", None)
+                    if is_personal_query
+                    else getattr(self.llm_engine, "PERSONAL_ASSISTANT_SYSTEM_PROMPT", None)
+                )
                 response = self.llm_engine.generate_with_memories(
                     user_message=user_message,
                     memories=relevant_memories,
                     temperature=temperature,
                     max_tokens=max_tokens,
                     fallback_on_empty=is_personal_query,
+                    system_prompt=system_prompt_to_use,
                     history=conversation_history,
                 )
             except Exception as error:
