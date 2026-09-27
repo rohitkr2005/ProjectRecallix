@@ -111,7 +111,77 @@ class MemoryExtractor:
             self._extract_goals(sentence)
         )
 
+        # Identity (Name & Role)
+        memories.extend(
+            self._extract_identity(sentence)
+        )
+
         return memories
+
+    # ---------------------------------------------------------
+    # Identity (Name & Role)
+    # ---------------------------------------------------------
+
+    def _extract_identity(
+        self,
+        sentence: str
+    ) -> List[ExtractedMemory]:
+
+        sentence = sentence.strip()
+        NON_NAME_WORDS = {
+            "a", "an", "the", "from", "working", "learning", "studying", "building",
+            "trying", "going", "sorry", "ready", "happy", "fine", "here", "excited",
+            "tired", "not", "just", "now", "also", "currently", "living", "located",
+            "doing", "using", "interested", "planning", "thinking", "there", "back"
+        }
+
+        # 1. Name: My name is <Name> or call me <Name>
+        m1 = re.search(r"^\s*(?:my\s+name\s+is|call\s+me)\s+([A-Za-z][A-Za-z0-9_\-\s]{1,30})", sentence, re.IGNORECASE)
+        if m1:
+            val = m1.group(1).strip().rstrip(".")
+            if val and val.lower() not in NON_NAME_WORDS:
+                return [
+                    ExtractedMemory(
+                        subject=self.subject,
+                        relation="name",
+                        value=val,
+                        category="PERSONAL",
+                        importance=9
+                    )
+                ]
+
+        # 2. Name: I am <Name> or I'm <Name>
+        m2 = re.search(r"^\s*(?:i\s+am|i'm)\s+([A-Za-z][a-zA-Z0-9_\-]{1,25})\b", sentence, re.IGNORECASE)
+        if m2:
+            val = m2.group(1).strip()
+            if val.lower() not in NON_NAME_WORDS:
+                return [
+                    ExtractedMemory(
+                        subject=self.subject,
+                        relation="name",
+                        value=val.capitalize(),
+                        category="PERSONAL",
+                        importance=9
+                    )
+                ]
+
+        # 3. Role: I am a <Role> or I work as a <Role>
+        m3 = re.search(r"^\s*(?:i\s+am|i'm|i\s+work\s+as)\s+(?:a|an)\s+([A-Za-z][A-Za-z0-9_\-\s]{2,40})", sentence, re.IGNORECASE)
+        if m3:
+            val = m3.group(1).strip().rstrip(".")
+            if val:
+                return [
+                    ExtractedMemory(
+                        subject=self.subject,
+                        relation="role",
+                        value=val,
+                        category="WORK",
+                        importance=8
+                    )
+                ]
+
+        return []
+
 
     # ---------------------------------------------------------
     # Preferences
@@ -480,10 +550,11 @@ class MemoryExtractor:
         message: str
     ) -> List[str]:
 
-        # First split on normal sentence punctuation.
+        # First split on sentence punctuation or questions following a statement.
         sentences = re.split(
-            r"(?<=[.!?])\s+",
-            message
+            r"(?<=[.!?])\s+|[,]\s*(?=(?:do|can|could|will|would|is|are|am|who|what|where|how|why)\b)|\s+(?=(?:do\s+you|can\s+you|could\s+you|will\s+you|who\s+are|what\s+is)\b)",
+            message,
+            flags=re.IGNORECASE
         )
 
         result = []

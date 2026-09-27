@@ -90,6 +90,7 @@ class LLMEngine:
         system_prompt=None,
         temperature=0.2,
         max_tokens=500,
+        history=None,
     ):
         """
         Generate a response using the configured Ollama model.
@@ -109,6 +110,18 @@ class LLMEngine:
                     "content": system_prompt.strip(),
                 }
             )
+
+        if history:
+            for item in history:
+                if isinstance(item, dict) and "role" in item and "content" in item:
+                    role = item["role"]
+                    if role in ("user", "assistant"):
+                        content_str = str(item["content"]).strip()
+                        if content_str:
+                            messages.append({
+                                "role": role,
+                                "content": content_str,
+                            })
 
         messages.append(
             {
@@ -187,9 +200,10 @@ class LLMEngine:
         max_tokens=500,
         system_prompt=None,
         fallback_on_empty=True,
+        history=None,
     ):
         """
-        Generate a response using retrieved Recallix memories.
+        Generate a response using retrieved Recallix memories and conversation history.
 
         When fallback_on_empty is True, if no supported active memories
         are provided, immediately returns UNSUPPORTED_RESPONSE without
@@ -222,6 +236,7 @@ class LLMEngine:
             system_prompt=effective_system_prompt,
             temperature=temperature,
             max_tokens=max_tokens,
+            history=history,
         )
 
     def build_memory_context(self, memories, max_memories=None):
@@ -357,7 +372,7 @@ class LLMEngine:
 
         return filtered
 
-    def verify_answer_grounding(self, response, memories):
+    def verify_answer_grounding(self, response, memories, is_general_query=False):
         """
         Verify whether an answer is grounded in the provided memories.
 
@@ -407,6 +422,13 @@ class LLMEngine:
                 memory_values.append(str(val).strip())
 
         if not memory_values:
+            if is_general_query:
+                return {
+                    "grounded": True,
+                    "supported_values": [],
+                    "grounding_score": 1.0,
+                    "details": "General conversational answer.",
+                }
             return {
                 "grounded": False,
                 "supported_values": [],

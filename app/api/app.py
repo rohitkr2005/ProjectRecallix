@@ -239,6 +239,7 @@ def chat_with_assistant(
         top_k=req.top_k,
         include_explanations=req.include_explanations,
         user_id=current_user.id,
+        conversation_history=req.history,
     )
 
     grounding_details = None

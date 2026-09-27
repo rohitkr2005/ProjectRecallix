@@ -313,6 +313,104 @@ class AssistantEngine:
             )
         return user_explanations
 
+    def _is_assistant_self_query(self, text: str) -> bool:
+        """Detect questions asking about Recallix itself, its purpose, or capabilities."""
+        patterns = [
+            r"\bwho\s+are\s+you\b",
+            r"\bwhat\s+are\s+you\b",
+            r"\bwhat\s+is\s+your\s+name\b",
+            r"\bwhat\s+can\s+you\s+do\b",
+            r"\bhow\s+do\s+you\s+work\b",
+            r"\bwhat\s+is\s+recallix\b",
+            r"\btell\s+me\s+about\s+yourself\b",
+            r"\bintroduce\s+yourself\b",
+        ]
+        t = text.strip().lower()
+        return any(re.search(p, t) for p in patterns)
+
+    def _is_owner_identity_query(self, text: str) -> bool:
+        """Detect queries asking about who the user is or whether the assistant knows them."""
+        patterns = [
+            r"\bwho\s+am\s+i\b",
+            r"\bdo\s+you\s+know\s+me\b",
+            r"\bdo\s+you\s+remember\s+me\b",
+            r"\bwhat\s+is\s+my\s+name\b",
+            r"\bwho\s+i\s+am\b",
+        ]
+        t = text.strip().lower()
+        return any(re.search(p, t) for p in patterns)
+
+    def _is_personal_memory_query(self, text: str) -> bool:
+        """Detect queries specifically asking for personal/private facts about the user."""
+        patterns = [
+            r"\bmy\s+[a-zA-Z]",
+            r"\bdo\s+i\b",
+            r"\bam\s+i\b",
+            r"\bdid\s+i\b",
+            r"\bhave\s+i\b",
+            r"\bwhere\s+do\s+i\b",
+            r"\bwhat\s+do\s+i\b",
+            r"\bwho\s+is\s+my\b",
+            r"\btell\s+me\s+about\s+my\b",
+            r"\bremember\s+about\s+me\b",
+            r"\bwhat\s+are\s+my\b",
+            r"\bwhich\s+is\s+my\b",
+        ]
+        t = text.strip().lower()
+        return any(re.search(p, t) for p in patterns)
+
+    def _build_owner_identity_response(self, user_id=None, newly_saved=None):
+        """Construct warm, personalized response when user asks 'who am I' or 'do you know me'."""
+        name = None
+        if newly_saved:
+            for s in newly_saved:
+                if s.get("relation") == "name":
+                    name = s.get("value")
+                    break
+
+        if not name:
+            session = getattr(self.memory_store, "session", None)
+            if session:
+                try:
+                    from app.database import Memory
+                    q = session.query(Memory).filter(Memory.active.is_(True))
+                    if user_id is not None:
+                        q = q.filter(Memory.user_id == user_id)
+                    all_mems = q.all()
+                    for m in all_mems:
+                        if getattr(m, "relation", "") == "name":
+                            name = getattr(m, "value", None)
+                            break
+                except Exception:
+                    pass
+
+        if not name and self.memory_store:
+            for fetcher_name in ("get_all_memories", "list_memories"):
+                fetcher = getattr(self.memory_store, fetcher_name, None)
+                if callable(fetcher):
+                    try:
+                        mems = fetcher(user_id=user_id) if "user_id" in fetcher.__code__.co_varnames else fetcher()
+                        for m in mems or []:
+                            if getattr(m, "relation", "") == "name" and getattr(m, "active", True):
+                                name = getattr(m, "value", None)
+                                break
+                        if name:
+                            break
+                    except Exception:
+                        pass
+
+        if name:
+            return (
+                f"Yes, of course! You are {name}. I remember who you are. "
+                "I'm keeping track of your projects, skills, preferences, and notes so you never lose them. "
+                "How can I help you today?"
+            )
+        else:
+            return (
+                "Yes, I know you as the owner of this account! However, you haven't told me your name yet. "
+                "What should I call you, and what are you working on?"
+            )
+
     def respond(
         self,
         user_message,
@@ -325,6 +423,7 @@ class AssistantEngine:
         include_explanations=False,
         fallback_to_extractive=True,
         user_id=None,
+        conversation_history=None,
     ):
         user_message = validate_user_query(user_message)
         tracker = LatencyTracker()
@@ -357,10 +456,96 @@ class AssistantEngine:
                     log_error_event(self.logger, "memory_extraction_failed", error=e)
                     saved_records = []
 
+        # 0. Check for Assistant Self-Awareness Query ("who are you", "what is recallix")
+        if self._is_assistant_self_query(user_message):
+            reply = (
+                "I am Recallix, your personal AI Second Brain and dedicated assistant! "
+                "I'm designed to help you remember everything about your life, projects, skills, "
+                "preferences, ideas, and notes across all our conversations. "
+                "Unlike other assistants that forget who you are, I store your personal context and recall it "
+                "whenever you need it. You can chat with me, ask me questions, or tell me anything you'd like me to remember. "
+                "How can I help you today?"
+            )
+            result = {
+                "response": reply,
+                "input_type": input_type,
+                "extracted_memories": saved_records,
+                "memories": [],
+                "retrieved_memories": [],
+                "intent": None,
+                "intent_confidence": 1.0,
+                "intent_strict": False,
+                "supported": True,
+                "grounded": True,
+                "grounding_details": {
+                    "grounded": True,
+                    "supported_values": [],
+                    "grounding_score": 1.0,
+                    "details": "Assistant self-awareness response.",
+                },
+                "llm_status": "assistant_identity",
+            }
+            if include_explanations:
+                result["retrieval_explanations"] = []
+                result["explanations"] = []
+                result["why_used"] = []
+            if settings.enable_metrics:
+                result["performance_metrics"] = tracker.get_metrics()
+            return result
+
+        # 0.5 Check for Owner Identity Query ("do you know me", "who am I")
+        if self._is_owner_identity_query(user_message):
+            saved_name = None
+            if saved_records:
+                for r in saved_records:
+                    if r.get("relation") == "name":
+                        saved_name = r.get("value")
+                        break
+
+            if saved_name:
+                reply = (
+                    f"Hello {saved_name}! Nice to meet you. I've recorded your name in my memory. "
+                    "Since this is our first chat, I don't have other notes or projects saved for you yet, "
+                    "but tell me what you're working on, what you like, or anything you'd like me to keep in mind, "
+                    "and I'll remember everything!"
+                )
+            else:
+                reply = self._build_owner_identity_response(user_id=user_id, newly_saved=saved_records)
+
+            result = {
+                "response": reply,
+                "input_type": input_type,
+                "extracted_memories": saved_records,
+                "memories": [],
+                "retrieved_memories": [],
+                "intent": None,
+                "intent_confidence": 1.0,
+                "intent_strict": False,
+                "supported": True,
+                "grounded": True,
+                "grounding_details": {
+                    "grounded": True,
+                    "supported_values": [saved_name] if saved_name else [],
+                    "grounding_score": 1.0,
+                    "details": "Owner identity recognition.",
+                },
+                "llm_status": "owner_identity",
+            }
+            if include_explanations:
+                result["retrieval_explanations"] = []
+                result["explanations"] = []
+                result["why_used"] = []
+            if settings.enable_metrics:
+                result["performance_metrics"] = tracker.get_metrics()
+            return result
+
         # 1. Pure STATEMENT handling
         if input_type == InputType.STATEMENT:
             if saved_records:
-                if len(saved_records) == 1:
+                name_rec = next((r for r in saved_records if r.get("relation") == "name"), None)
+                if name_rec:
+                    response_text = f"Nice to meet you, {name_rec['value']}! I've recorded your name in my memory. What are you working on today?"
+                elif len(saved_records) == 1:
                     rec = saved_records[0]
                     rel = rec["relation"].replace("_", " ")
                     is_updated = (
@@ -490,7 +675,10 @@ class AssistantEngine:
         explanations = self._build_retrieval_explanations(retrieved_memories)
         user_explanations = self._build_user_facing_explanations(relevant_memories)
 
-        if not self._has_supported_memories(relevant_memories):
+        is_personal_query = self._is_personal_memory_query(user_message)
+        has_supported = self._has_supported_memories(relevant_memories)
+
+        if not has_supported and is_personal_query:
             grounding = {
                 "grounded": True,
                 "supported_values": [],
@@ -527,16 +715,24 @@ class AssistantEngine:
                     memories=relevant_memories,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    fallback_on_empty=is_personal_query,
+                    history=conversation_history,
                 )
             except Exception as error:
                 log_error_event(self.logger, "llm_generation_failed", error=error)
                 if not fallback_to_extractive:
                     raise
                 context_text = self.llm_engine.build_memory_context(relevant_memories)
-                response = (
-                    "I'm currently unable to reach the local LLM runtime. "
-                    f"Based directly on your stored memory:\n{context_text}"
-                )
+                if relevant_memories:
+                    response = (
+                        "I'm currently unable to reach the local LLM runtime. "
+                        f"Based directly on your stored memory:\n{context_text}"
+                    )
+                else:
+                    response = (
+                        "I am currently having trouble connecting to my local LLM runtime to process your request. "
+                        "Please verify Ollama is active."
+                    )
                 llm_status = f"fallback: {str(error)}"
 
         log_llm_event(self.logger, prompt=user_message, status=llm_status)
@@ -544,8 +740,8 @@ class AssistantEngine:
         grounding = getattr(
             self.llm_engine,
             "verify_answer_grounding",
-            lambda r, m: {"grounded": True, "supported_values": [], "grounding_score": 1.0, "details": "Unverified"},
-        )(response, relevant_memories)
+            lambda r, m, **k: {"grounded": True, "supported_values": [], "grounding_score": 1.0, "details": "Unverified"},
+        )(response, relevant_memories, is_general_query=not is_personal_query)
 
         # 10.2 / 10.3: Feedback & Reinforcement
         if relevant_memories and hasattr(self, "importance_learner") and self.importance_learner:

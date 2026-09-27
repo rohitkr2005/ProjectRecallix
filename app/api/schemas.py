@@ -41,6 +41,7 @@ class ChatRequest(BaseModel):
     conversation_id: Optional[str] = None
     include_explanations: bool = False
     top_k: int = Field(default=5, ge=1, le=20)
+    history: Optional[List[Dict[str, str]]] = None
 
 
 class GroundingDetailsSchema(BaseModel):

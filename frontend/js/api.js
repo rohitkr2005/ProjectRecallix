@@ -106,13 +106,14 @@ class RecallixAPI {
   // -------------------------------------------------------------------------
   // Chat Endpoint
   // -------------------------------------------------------------------------
-  async chat(message, topK = 5, includeExplanations = true) {
+  async chat(message, topK = 5, includeExplanations = true, history = []) {
     return await this.request("/api/v1/chat", {
       method: "POST",
       body: JSON.stringify({
         message,
         top_k: topK,
         include_explanations: includeExplanations,
+        history,
       }),
     });
   }

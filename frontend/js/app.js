@@ -157,6 +157,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Logout
   logoutBtn.addEventListener("click", () => {
     api.clearToken();
+    chatHistory = [];
     showUnauthenticatedView();
   });
 
@@ -183,6 +184,8 @@ document.addEventListener("DOMContentLoaded", () => {
   // -------------------------------------------------------------------------
   // Chat Interface (15.8 & 15.10)
   // -------------------------------------------------------------------------
+  let chatHistory = [];
+
   function appendChatMessage(text, sender = "user", meta = null) {
     const bubble = document.createElement("div");
     bubble.className = `chat-bubble ${sender}`;
@@ -228,8 +231,20 @@ document.addEventListener("DOMContentLoaded", () => {
     chatSendBtn.disabled = true;
 
     try {
-      const result = await api.chat(message, 5, true);
+      const result = await api.chat(message, 5, true, chatHistory);
       appendChatMessage(result.response, "assistant", result);
+
+      // Track multi-turn conversation history (keep latest 20 turns)
+      chatHistory.push({ role: "user", content: message });
+      chatHistory.push({ role: "assistant", content: result.response });
+      if (chatHistory.length > 20) {
+        chatHistory = chatHistory.slice(-20);
+      }
+
+      // If a memory was extracted/saved during chat, refresh the memory cards list!
+      if (result.extracted_memories && result.extracted_memories.length > 0) {
+        loadMemories();
+      }
     } catch (err) {
       appendChatMessage(`Error: ${err.message}`, "assistant");
     } finally {
