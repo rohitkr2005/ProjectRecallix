@@ -40,7 +40,9 @@ class AssistantEngine:
         r"^\s*(?:can you tell me|tell me|could you tell me)\b",
         r"^\s*(?:do i|am i|have i|did i|will i|was i)\b",
         r"^\s*(?:is there|are there|do you remember|do you know)\b",
+        r"^\s*(?:do you|can you|could you|would you|should you|are you|will you|have you|did you)\b",
         r"\b(?:what is|what are|where do|where am|who is|which project|which skill)\b",
+        r"\b(?:understand|speak|explain|describe|tell me|summarize|translate|write|code|create|generate)\b",
     ]
 
     def __init__(
@@ -314,19 +316,19 @@ class AssistantEngine:
         return user_explanations
 
     def _is_assistant_self_query(self, text: str) -> bool:
-        """Detect questions asking about Recallix itself, its purpose, or capabilities."""
+        """Detect pure standalone questions asking about Recallix itself, its purpose, or capabilities."""
+        cleaned = re.sub(r"[?!.]", "", text.strip().lower())
         patterns = [
-            r"\bwho\s+are\s+you\b",
-            r"\bwhat\s+are\s+you\b",
-            r"\bwhat\s+is\s+your\s+name\b",
-            r"\bwhat\s+can\s+you\s+do\b",
-            r"\bhow\s+do\s+you\s+work\b",
-            r"\bwhat\s+is\s+recallix\b",
-            r"\btell\s+me\s+about\s+yourself\b",
-            r"\bintroduce\s+yourself\b",
+            r"^who\s+are\s+you$",
+            r"^what\s+are\s+you$",
+            r"^what\s+is\s+your\s+name$",
+            r"^what\s+can\s+you\s+do$",
+            r"^how\s+do\s+you\s+work$",
+            r"^what\s+is\s+recallix$",
+            r"^tell\s+me\s+about\s+yourself$",
+            r"^introduce\s+yourself$",
         ]
-        t = text.strip().lower()
-        return any(re.search(p, t) for p in patterns)
+        return any(re.match(p, cleaned) for p in patterns)
 
     def _is_owner_identity_query(self, text: str) -> bool:
         """Detect queries asking about who the user is or whether the assistant knows them."""
@@ -600,43 +602,55 @@ class AssistantEngine:
 
         # 2. Pure NEITHER (chit-chat / greeting) handling
         if input_type == InputType.NEITHER:
-            with tracker.timer("chit_chat_ms"):
-                msg_lower = user_message.lower()
-                if any(w in msg_lower for w in ["hi", "hello", "hey"]):
-                    reply = "Hello! How can I help you today?"
-                elif any(w in msg_lower for w in ["thank", "thanks"]):
-                    reply = "You're welcome!"
-                elif any(w in msg_lower for w in ["bye", "goodbye"]):
-                    reply = "Goodbye! Let me know whenever you need anything."
-                else:
-                    reply = "I'm here to answer your questions and manage your memories."
+            msg_lower = user_message.strip().lower()
+            is_simple_greeting = bool(
+                re.search(r"\b(?:hi|hello|hey|greetings|namaste|hola)\b", msg_lower)
+                and len(msg_lower.split()) <= 4
+            )
+            is_simple_thanks = bool(
+                re.search(r"\b(?:thank|thanks|thx)\b", msg_lower)
+                and len(msg_lower.split()) <= 4
+            )
+            is_simple_bye = bool(
+                re.search(r"\b(?:bye|goodbye|see ya|cya)\b", msg_lower)
+                and len(msg_lower.split()) <= 4
+            )
 
-            result = {
-                "response": reply,
-                "input_type": input_type,
-                "extracted_memories": [],
-                "memories": [],
-                "retrieved_memories": [],
-                "intent": None,
-                "intent_confidence": 0.0,
-                "intent_strict": False,
-                "supported": True,
-                "grounded": True,
-                "grounding_details": {
-                    "grounded": True,
-                    "supported_values": [],
-                    "grounding_score": 1.0,
-                    "details": "Conversational reply.",
-                },
-                "llm_status": "skipped_chit_chat",
-            }
-            if include_explanations:
-                result["retrieval_explanations"] = []
-                result["explanations"] = []
-                result["why_used"] = []
-            if settings.enable_metrics:
-                result["performance_metrics"] = tracker.get_metrics()
-            return result
+            if is_simple_greeting or is_simple_thanks or is_simple_bye:
+                with tracker.timer("chit_chat_ms"):
+                    if is_simple_greeting:
+                        reply = "Hello! How can I help you today?"
+                    elif is_simple_thanks:
+                        reply = "You're welcome!"
+                    else:
+                        reply = "Goodbye! Let me know whenever you need anything."
+
+                result = {
+                    "response": reply,
+                    "input_type": input_type,
+                    "extracted_memories": [],
+                    "memories": [],
+                    "retrieved_memories": [],
+                    "intent": None,
+                    "intent_confidence": 0.0,
+                    "intent_strict": False,
+                    "supported": True,
+                    "grounded": False,
+                    "grounding_details": {
+                        "grounded": False,
+                        "supported_values": [],
+                        "grounding_score": 1.0,
+                        "details": "Conversational reply.",
+                    },
+                    "llm_status": "skipped_chit_chat",
+                }
+                if include_explanations:
+                    result["retrieval_explanations"] = []
+                    result["explanations"] = []
+                    result["why_used"] = []
+                if settings.enable_metrics:
+                    result["performance_metrics"] = tracker.get_metrics()
+                return result
 
         # 3. QUESTION or BOTH handling
         with tracker.timer("retrieval_ms"):
@@ -712,6 +726,24 @@ class AssistantEngine:
                 result["performance_metrics"] = tracker.get_metrics()
             return result
 
+        # For general queries, only pass memories into the LLM if they are genuinely relevant
+        memories_for_llm = relevant_memories
+        if not is_personal_query:
+            query_words = set(re.findall(r"\w{3,}", user_message.lower()))
+            meaningful_memories = []
+            common_stop = {"user", "the", "and", "for", "with", "this", "that", "from", "are", "you", "tell", "what"}
+            for item in relevant_memories:
+                mem = item.get("memory") if isinstance(item, dict) else item
+                score = float(item.get("score", 0.0)) if isinstance(item, dict) else 0.0
+                val = str(getattr(mem, "value", "")).lower()
+                subj = str(getattr(mem, "subject", "")).lower()
+                rel = str(getattr(mem, "relation", "")).lower()
+                mem_words = set(re.findall(r"\w{3,}", f"{subj} {rel} {val}"))
+                meaningful_overlap = (query_words & mem_words) - common_stop
+                if meaningful_overlap or score >= 0.70:
+                    meaningful_memories.append(item)
+            memories_for_llm = meaningful_memories
+
         llm_status = "success"
         with tracker.timer("llm_ms"):
             try:
@@ -722,7 +754,7 @@ class AssistantEngine:
                 )
                 response = self.llm_engine.generate_with_memories(
                     user_message=user_message,
-                    memories=relevant_memories,
+                    memories=memories_for_llm,
                     temperature=temperature,
                     max_tokens=max_tokens,
                     fallback_on_empty=is_personal_query,
@@ -733,8 +765,8 @@ class AssistantEngine:
                 log_error_event(self.logger, "llm_generation_failed", error=error)
                 if not fallback_to_extractive:
                     raise
-                context_text = self.llm_engine.build_memory_context(relevant_memories)
-                if relevant_memories:
+                context_text = self.llm_engine.build_memory_context(memories_for_llm)
+                if memories_for_llm:
                     response = (
                         "I'm currently unable to reach the local LLM runtime. "
                         f"Based directly on your stored memory:\n{context_text}"
@@ -752,14 +784,16 @@ class AssistantEngine:
             self.llm_engine,
             "verify_answer_grounding",
             lambda r, m, **k: {"grounded": True, "supported_values": [], "grounding_score": 1.0, "details": "Unverified"},
-        )(response, relevant_memories, is_general_query=not is_personal_query)
+        )(response, memories_for_llm, is_general_query=not is_personal_query)
+
+        is_grounded = bool(memories_for_llm and grounding.get("grounded", True))
 
         # 10.2 / 10.3: Feedback & Reinforcement
-        if relevant_memories and hasattr(self, "importance_learner") and self.importance_learner:
+        if memories_for_llm and hasattr(self, "importance_learner") and self.importance_learner:
             try:
                 sup_vals = grounding.get("supported_values", [])
                 self.importance_learner.apply_retrieval_feedback(
-                    retrieved_memories=relevant_memories,
+                    retrieved_memories=memories_for_llm,
                     supported_values=sup_vals,
                 )
             except Exception:
@@ -769,13 +803,13 @@ class AssistantEngine:
             "response": response,
             "input_type": input_type,
             "extracted_memories": saved_records,
-            "memories": relevant_memories,
+            "memories": memories_for_llm,
             "retrieved_memories": retrieved_memories,
             "intent": intent,
             "intent_confidence": intent_analysis["confidence"],
             "intent_strict": strict_intent,
             "supported": True,
-            "grounded": grounding.get("grounded", True),
+            "grounded": is_grounded,
             "grounding_details": grounding,
             "llm_status": llm_status,
         }
